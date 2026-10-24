@@ -1,7 +1,7 @@
 PY := backend/.venv/bin/python
 UV := $(shell command -v uv 2>/dev/null)
 
-.PHONY: install backend-deps frontend-deps test build seed reset start cli-status app icon
+.PHONY: install backend-deps frontend-deps test build seed reset start cli-status app bundle icon
 
 install: backend-deps frontend-deps
 
@@ -45,3 +45,16 @@ app: backend-deps build
 	mkdir -p "$(APP_DIR)" && rm -rf "$(APP_DIR)/LearnHarness.app" && cp -R build/app/LearnHarness.app "$(APP_DIR)/"
 	@rm -f build-app.log
 	@echo "Installed $(APP_DIR)/LearnHarness.app — open it from Launchpad/Spotlight or: open -a LearnHarness"
+
+# Stage B: self-contained LearnHarness.app (PyInstaller, embedded Python) installed to /Applications.
+# Replaces the stage A copy in ~/Applications so only one app owns the bundle id (rebuild it with `make app`).
+bundle: backend-deps build
+	@test -f macos/LearnHarness.icns || $(PY) macos/make_icon.py
+	rm -rf build/bundle build/pyinstaller
+	$(PY) -m PyInstaller macos/LearnHarness.spec --noconfirm --distpath build/bundle --workpath build/pyinstaller > build-bundle.log 2>&1 || (tail -40 build-bundle.log; exit 1)
+	codesign --force --deep -s - build/bundle/LearnHarness.app
+	rm -rf /Applications/LearnHarness.app && cp -R build/bundle/LearnHarness.app /Applications/
+	@if [ -d "$(APP_DIR)/LearnHarness.app" ]; then rm -rf "$(APP_DIR)/LearnHarness.app"; echo "Removed stage A copy from $(APP_DIR)"; fi
+	@rm -f build-bundle.log
+	@du -sh /Applications/LearnHarness.app
+	@echo "Installed /Applications/LearnHarness.app (self-contained) — open -a LearnHarness"

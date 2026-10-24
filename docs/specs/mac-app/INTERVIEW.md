@@ -42,4 +42,11 @@ started: 2026-10-23
 
 # Open questions
 
+# Build notes (2026-10-23)
+- Stage A built with py2app 0.28 alias mode; NSBundle.mainBundle() = io.github.chow-n.learnharness (TCC-safe).
+- pywebview `closed` does not fire on Cmd+Q; shutdown hooked on `closing` too (applicationShouldTerminate_).
+- Stage B PyInstaller 6.22: sympy/numpy/scipy must be hidden imports (used only in verifier child code). 102 MB, cold start 1.3 s.
+- Frozen app seeds from the bundle and never reads the repo DB (LEGACY_DB is inside the bundle) — by design.
+- Not verified by agent: mic + speech permission prompts and live transcription (need a human click).
+
 # Pending question: none (approved 2026-10-24T01:00:13Z)

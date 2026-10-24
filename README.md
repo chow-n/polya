@@ -49,7 +49,7 @@ Each mechanism is based on a well-replicated finding:
 
 ## Quick start
 
-Requirements: macOS or Linux, Python 3.11+ (`uv` recommended), Node 18+.
+Requirements: macOS or Linux for the web app (the Mac app needs macOS 13+ on Apple silicon), Python 3.11+ (`uv` recommended), Node 18+.
 
 ```bash
 git clone https://github.com/chow-n/learn-harness && cd learn-harness
@@ -57,17 +57,30 @@ make install          # backend venv + frontend deps
 ./start.sh            # FastAPI :8000 + Vite :5173, waits for health checks
 ```
 
-Open http://localhost:5173. On first start the database is seeded with 20 nodes across linear algebra, measure-theoretic probability, transformers and reinforcement learning, along with 16 hyperedges, 3 interactive demos and 3 example sessions. If port 5173 is taken, run `LEARNHARNESS_WEB_PORT=5174 ./start.sh`.
+Open http://localhost:5173. Data lives in `~/LearnHarness/` (override with `LEARNHARNESS_HOME`). On first start the database is seeded with 20 nodes across linear algebra, measure-theoretic probability, transformers and reinforcement learning, along with 16 hyperedges, 3 interactive demos and 3 example sessions. If port 5173 is taken, run `LEARNHARNESS_WEB_PORT=5174 ./start.sh`.
 
 ```bash
 ./harness-cli status   # mastery, Bjork window, calibration decomposition
 ./harness-cli due      # due list at 90% desired retention
 ./harness-cli graph    # hypergraph by logical depth
 ./harness-cli scratch  # print / edit / watch workspace/scratch.tex
-make test              # 30 backend tests (deterministic engine, offline)
+make test              # 34 backend tests (deterministic engine, offline)
 ```
 
 `workspace/scratch.tex` is watched live: save it in your editor and it streams into the UI. Notes and problem sets in `workspace/notes` and `workspace/problems` are parsed (`\begin{theorem}`, `\begin{problem}`, …) for retrieval and problem import.
+
+## Mac app
+
+```bash
+make bundle   # self-contained LearnHarness.app (embedded Python, ~100 MB) → /Applications
+make app      # dev variant: repo-backed app (py2app alias) → ~/Applications; code edits show on relaunch
+```
+
+- **One process, one window.** It runs on a random localhost port, so it won't clash with other dev servers. Cold start is about 1.5 s.
+- **Shared data home.** The app, `./start.sh` and `./harness-cli` all use `~/LearnHarness/` (`harness.db` plus `workspace/`). The repo-backed variant copies an existing repo database there on first launch; it copies and never moves.
+- **On-device dictation.** Inside the app, voice dictation uses Apple's speech recognizer with no API key. macOS asks for microphone and speech permission on the first mic use.
+- **Menu.** Open Workspace Folder, Edit scratch.tex in Terminal, Reveal Data Folder, Show App Log, Reload, and Open in Browser.
+- **Signing.** The app is ad-hoc signed for the Mac that built it; it is not notarized. Build it yourself from source.
 
 ## LLM engines (all optional)
 
@@ -96,8 +109,8 @@ The SymPy verifier runs code in a separate process with blocked imports, no file
 
 ## Status
 
-- v0.1.0: web app (this release).
-- In progress: a native macOS app, first repo-backed and then self-contained with on-device dictation (see [`docs/specs/mac-app/SPEC.md`](docs/specs/mac-app/SPEC.md)).
+- v0.1.0: web app.
+- v0.2.0: native macOS app, repo-backed (`make app`) and self-contained (`make bundle`), with on-device dictation (see [`docs/specs/mac-app/SPEC.md`](docs/specs/mac-app/SPEC.md)).
 - Next: fitting the memory and mastery parameters to your own trace history.
 
 ## License

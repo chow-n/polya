@@ -21,8 +21,9 @@ PLIST = {
                                            "think aloud instead of typing.",
 }
 
-setup(
-    app=["macos/launcher.py"],
-    name="LearnHarness",
-    options={"py2app": {"iconfile": "macos/LearnHarness.icns", "plist": PLIST, "argv_emulation": False}},
-)
+if __name__ == "__main__":
+    setup(
+        app=["macos/launcher.py"],
+        name="LearnHarness",
+        options={"py2app": {"iconfile": "macos/LearnHarness.icns", "plist": PLIST, "argv_emulation": False}},
+    )
