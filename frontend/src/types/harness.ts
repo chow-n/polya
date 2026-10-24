@@ -616,6 +616,7 @@ export type WsEventType =
   | 'notes_changed'
   | 'pong'
   | 'engine_attention'
+  | 'paper_progress'
   | 'error';
 
 export interface WsEvent {
@@ -644,6 +645,7 @@ export interface WsPayloads {
   notes_changed: { path: string };
   pong: Record<string, unknown>;
   engine_attention: { engine: string; reason: string };
+  paper_progress: { paper_id: string; status: PaperStatus; detail: string };
   error: { message: string };
 }
 
@@ -678,4 +680,81 @@ export interface LLMDiagnosis {
 export interface LLMOntology {
   nodes: Record<string, unknown>[];
   hyperedges: Record<string, unknown>[];
+}
+
+// ------------------------------------------------------------------ research papers (docs/specs/paper-reading)
+export type PaperStatus = 'FETCHING' | 'PARSED' | 'MAPPED' | 'FAILED';
+export type PaperRole = 'prerequisite' | 'definition' | 'assumption' | 'claim' | 'main_result';
+
+export interface PaperCreate {
+  arxiv?: string | null; // an arXiv link or id
+  workspace_path?: string | null; // a PDF already in your notes
+}
+
+export interface PaperOut {
+  id: string;
+  source: string;
+  arxiv_id: string;
+  doi: string;
+  title: string;
+  authors: string[];
+  year: number | null;
+  abstract: string;
+  text_kind: string;
+  status: PaperStatus;
+  status_detail: string;
+  map_engine: string;
+  session_id: string | null;
+  first_guess: string;
+  understanding: number | null; // mean mastery over the paper's own ideas
+  idea_count: number;
+  partial_map: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PaperIdeaOut {
+  node_id: string;
+  title: string;
+  role: PaperRole;
+  anchor: string;
+  quote: string;
+  mastery: number;
+  answered: boolean;
+  node_type: NodeType;
+}
+
+export interface PaperSourceOut {
+  id: string;
+  direction: 'reference' | 'citation' | 'explainer';
+  ref_key: string;
+  title: string;
+  authors: string;
+  year: number | null;
+  arxiv_id: string;
+  doi: string;
+  s2_id: string;
+  url: string;
+  contexts: { sentence: string; section: string }[];
+  sections: string[];
+  influential: boolean;
+  intents: string[];
+  cited_by_count: number | null;
+  is_survey: boolean;
+  for_node_id: string;
+  score: number;
+  why: string;
+}
+
+export interface PaperDetail extends PaperOut {
+  map: {
+    summary: string;
+    contributions: string[];
+    notation: { symbol_latex: string; meaning: string; existing_node_id?: string }[];
+    key_argument: { claim: string; steps: string[] } | null;
+    quotes_dropped: number;
+  };
+  ideas: PaperIdeaOut[];
+  sources: { reference: PaperSourceOut[]; citation: PaperSourceOut[]; explainer: PaperSourceOut[] };
+  links: { arxiv: string | null; pdf: string | null; code: string | null; semantic_scholar: string | null };
 }

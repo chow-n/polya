@@ -73,3 +73,12 @@ even more."
 # Open questions
 
 # Pending question: none — APPROVED (fast-track) by Nathan ("build out the full research loop") 2026-10-24
+
+# Build notes (2026-10-24)
+- Live: 1706.03762 → LaTeX source, 23 sections, 40 refs, cite contexts; claude_cli map in 177 s (12 ideas, all quotes
+  verified, 2 prerequisites + 1 claim reused existing nodes); top references Gehring/GNMT/Bahdanau (method sections +
+  S2 influential). OpenAlex citing list has data noise (one mis-merged record). Explainer search needs short concepts →
+  mapper now returns `concept`; exact-phrase OpenAlex title search.
+- Spec drift: paper files are NOT added to notes RAG (would flood the notes picker with .sty/.tex); grounding comes from
+  `orchestrator.paper_context` instead. Mapper timeout 300 s (`llm.complete_json(timeout=)`).
+- Deterministic sessions skip the referee/Feynman finale (they need the AI map's key_argument/assumptions).

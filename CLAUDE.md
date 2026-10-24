@@ -20,6 +20,19 @@
 - `cm.difficulty_controller` supersedes §4.2's "two clean answers → Δ+0.5": EWMA success (α 0.3, last 10, all sessions),
   target 80/85/90 (`~/Polya/prefs.json`) ± 0.07 → Δ ±0.5 and practice cue level ±1; hard-failure reset is kept.
 
+## AI engines (approved 2026-10-24, docs/specs/chatgpt-engine/SPEC.md)
+- `llm.engine_chain()` per provider, in-request fallback; `codex_cli` = `codex exec --ephemeral --ignore-user-config
+  --ignore-rules -s read-only` in an empty temp dir, prompt on stdin. Provider persisted in `~/Polya/prefs.json`.
+- Optional private engines: git-ignored `backend/local_engines/` (`ENGINES` dict; ChatGPT browser via Playwright, opt-in,
+  never picked by "auto"). NEVER commit it; no bot-detection evasion; never read other browsers' or Codex credentials.
+  Private tests: `POLYA_LLM=deterministic backend/.venv/bin/python -m pytest backend/local_engines/tests`.
+
+## Research papers (approved fast-track 2026-10-24, docs/specs/paper-reading/SPEC.md)
+- `backend/papers/` (fetch, latex, scholar, mapper, service); side tables `papers`, `paper_nodes`, `paper_refs`; files in
+  `~/Polya/workspace/papers/<id>/`. Paper sessions = `mode PROBE, sub_mode PAPER` (skim → prerequisite probes → grounded
+  teaching → REFEREE on the key argument → FEYNMAN on its assumptions → "Paper complete"). Ideas that came from a paper
+  are grounded in its passage in every later step (`orchestrator.paper_context`). Tests never touch the network.
+
 ---
 # Verbatim specification
 

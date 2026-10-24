@@ -2501,3 +2501,144 @@ textarea.code,
   color: var(--ink);
   font-style: italic;
 }
+
+/* ------------------------------------------------------------------ papers (paper-reading) */
+.ask-links {
+  display: inline-flex;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.next-h {
+  margin: 0 0 6px;
+  color: var(--ink-2);
+  font-size: var(--t-s);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.papers {
+  margin-top: 40px;
+}
+.next-meta .spinner {
+  margin-right: 6px;
+}
+.next-meta.bad,
+.paper-status.bad {
+  color: var(--bad);
+}
+.paper-title {
+  font: 600 var(--t-l) / 1.25 var(--font-read);
+  margin-bottom: 4px;
+}
+.paper-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin: 10px 0 14px;
+}
+.paper-links a,
+.source-title {
+  color: var(--accent-ink);
+}
+.paper-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-2);
+}
+.understood {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  column-gap: 10px;
+  row-gap: 6px;
+  margin: 4px 0 16px;
+}
+.understood-num {
+  font: 600 var(--t-xl) / 1 var(--font-read);
+}
+.understood .meter {
+  grid-column: 1 / -1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--paper-2);
+  overflow: hidden;
+}
+.understood .meter span {
+  display: block;
+  height: 100%;
+  background: var(--good);
+  border-radius: 3px;
+}
+.paper-list,
+.idea-list,
+.sources {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+}
+.idea-list {
+  list-style: none;
+  padding: 0;
+  gap: 6px;
+}
+.idea-list li {
+  display: grid;
+  grid-template-columns: 96px 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+}
+.idea-role {
+  color: var(--ink-2);
+  font-size: var(--t-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.notation {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+.notation > div {
+  display: grid;
+  grid-template-columns: minmax(70px, auto) 1fr;
+  gap: 14px;
+  align-items: baseline;
+}
+.notation dd {
+  margin: 0;
+  color: var(--ink-2);
+}
+.sources {
+  padding-left: 22px;
+  margin: 14px 0 12px;
+  gap: 14px;
+}
+.source-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+}
+.source-why {
+  margin: 2px 0 0;
+  color: var(--ink-2);
+}
+.source-ctx {
+  margin: 6px 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--rule);
+  color: var(--ink-2);
+  font-style: italic;
+}
+.paper-summary {
+  margin: 8px 0 18px;
+}
+@media (max-width: 520px) {
+  .idea-list li {
+    grid-template-columns: 1fr auto;
+  }
+  .idea-role {
+    grid-column: 1 / -1;
+  }
+}

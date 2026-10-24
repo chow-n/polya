@@ -62,3 +62,11 @@ talk to chat there with my account" → "yes do the browser version"
 
 # Pending question: none — APPROVED by Nathan ("Approve the chatgpt") 2026-10-24; spec approval covers the B4
   reading as written in SPEC.md B4. Build with one worker.
+
+# Build notes (2026-10-24)
+- Codex: `--ignore-user-config --ignore-rules` works (auth still from CODEX_HOME), ~3.3k tokens and ~8–10 s per call
+  instead of ~16k; prompt via stdin (`-`). Availability = `codex login status` (cached 60 s); tokens never read.
+- Private engine: backend/local_engines/{__init__,chatgpt_browser}.py + tests (7 pass against a fake chat page,
+  headless). Playwright 1.63.0 (Chromium 1243) in backend/.venv only; the plain sign-in launch uses --use-mock-keychain so
+  its cookies are readable by the automated window. App bundle 230 MB with the driver (was 102 MB).
+- Pending: live check with Nathan (Google sign-in, one real session, logout fallback).

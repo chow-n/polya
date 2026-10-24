@@ -9,6 +9,7 @@ import AppHeader from './components/AppHeader';
 import { runEscape, runPrimaryAction } from './components/kit';
 import LearnHome from './components/LearnHome';
 import MapScreen from './components/MapScreen';
+import PaperSheet from './components/PaperSheet';
 import ReviewScreen from './components/ReviewScreen';
 import SessionFocus from './components/SessionFocus';
 import SettingsSheet from './components/SettingsSheet';
@@ -54,13 +55,13 @@ export default function App(): JSX.Element {
         return;
       }
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-        if (s.modal && s.modal.kind !== 'settings') return;
+        if (s.modal && s.modal.kind !== 'settings' && s.modal.kind !== 'paper') return;
         e.preventDefault();
         runPrimaryAction();
         return;
       }
       if (e.key === 'Escape') {
-        if (s.modal && s.modal.kind !== 'settings') return; // legacy modals close themselves
+        if (s.modal && s.modal.kind !== 'settings' && s.modal.kind !== 'paper') return; // legacy modals close themselves
         if (runEscape()) {
           e.preventDefault();
           return;
@@ -93,6 +94,7 @@ export default function App(): JSX.Element {
         {modal?.kind === 'scratch' ? <ScratchModal onClose={() => openModal(null)} /> : null}
       </div>
       {modal?.kind === 'settings' ? <SettingsSheet onClose={() => openModal(null)} /> : null}
+      {modal?.kind === 'paper' ? <PaperSheet id={modal.id} onClose={() => openModal(null)} /> : null}
       <Toasts />
     </div>
   );

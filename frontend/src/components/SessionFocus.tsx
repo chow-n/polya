@@ -16,6 +16,7 @@ import RefereeDuelArena from './RefereeDuelArena';
 import SidebarSubagentDock from './SidebarSubagentDock';
 import { PreparingCard } from './stepParts';
 import { VoiceRow } from './TelemetryInputDock';
+import { MathText } from '../utils/katexRenderer';
 
 function StepView({ step, held }: { step: StepPayload; held?: HeldResult | null }): JSX.Element {
   switch (step.kind) {
@@ -32,7 +33,7 @@ function StepView({ step, held }: { step: StepPayload; held?: HeldResult | null 
     case 'FEYNMAN':
       return <RefereeDuelArena key={step.step_id} step={step} held={held} />;
     case 'COMPLETE':
-      return <SessionComplete />;
+      return step.title === 'Paper complete' ? <PaperComplete step={step} /> : <SessionComplete />;
   }
 }
 
@@ -59,6 +60,37 @@ function ProgressDots({ plan, activeIds }: { plan: PlanItem[]; activeIds: Set<st
         );
       })}
     </ol>
+  );
+}
+
+function PaperComplete({ step }: { step: StepPayload }): JSX.Element {
+  const st = useHarnessStore((s) => s.sessionState);
+  const papers = useHarnessStore((s) => s.papers);
+  const openModal = useHarnessStore((s) => s.openModal);
+  const exitFocus = useHarnessStore((s) => s.exitFocus);
+  const setTab = useHarnessStore((s) => s.setTab);
+  const paper = papers.find((p) => p.session_id === st?.session.id);
+  const back = (): void => {
+    exitFocus();
+    setTab(1);
+  };
+  usePrimaryAction(back, true);
+  return (
+    <article className="card complete">
+      <header className="card-head">
+        <p className="kind">Paper complete</p>
+        <h1 className="card-title">{paper?.title ?? st?.session.target_goal}</h1>
+      </header>
+      <MathText text={step.body_markdown} className="paper-summary" />
+      <div className="actions">
+        <PrimaryButton onClick={back}>Back to Learn</PrimaryButton>
+        {paper ? (
+          <button className="btn-secondary" onClick={() => openModal({ kind: 'paper', id: paper.id })}>
+            Sources and notation
+          </button>
+        ) : null}
+      </div>
+    </article>
   );
 }
 
@@ -144,7 +176,10 @@ export default function SessionFocus(): JSX.Element {
   const busyAdvance = useHarnessStore((s) => s.busy.advance);
   const busySession = useHarnessStore((s) => s.busy.session);
   const exitFocus = useHarnessStore((s) => s.exitFocus);
+  const papers = useHarnessStore((s) => s.papers);
+  const openModal = useHarnessStore((s) => s.openModal);
   const advanced = usePrefs((s) => s.advanced);
+  const paper = st?.session.sub_mode === 'PAPER' ? papers.find((p) => p.session_id === st.session.id) : undefined;
 
   const creating = Boolean(busyCreate && creatingGoal !== null);
   const topic = creating ? creatingGoal : st?.session.target_goal ?? '';
@@ -167,6 +202,11 @@ export default function SessionFocus(): JSX.Element {
             {topic}
           </p>
           <ProgressDots plan={plan} activeIds={activeIds} />
+          {paper ? (
+            <button className="text-btn" onClick={() => openModal({ kind: 'paper', id: paper.id })}>
+              Paper
+            </button>
+          ) : null}
           <button className="text-btn" onClick={exitFocus}>
             Exit
           </button>

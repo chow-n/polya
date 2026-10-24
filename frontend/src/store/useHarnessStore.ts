@@ -29,6 +29,9 @@ import {
   type LadderRung,
   type ModelEvalOut,
   type NodeDetail,
+  type PaperCreate,
+  type PaperDetail,
+  type PaperOut,
   type PracticeQueueItem,
   type ReadingNote,
   type ScratchOut,
@@ -127,7 +130,38 @@ export const api = {
   updateSettings: (body: SettingsUpdate) => request<SettingsOut>('PUT', '/api/settings', body),
   modelEval: () => request<ModelEvalOut>('GET', '/api/model-eval'),
   chatgptLogin: () => request<{ opened: boolean; message: string }>('POST', '/api/engines/chatgpt-browser/login'),
+  papers: () => request<PaperOut[]>('GET', '/api/papers'),
+  paper: (id: string) => request<PaperDetail>('GET', `/api/papers/${encodeURIComponent(id)}`),
+  createPaper: (body: PaperCreate) => request<PaperOut>('POST', '/api/papers', body),
+  uploadPaper: async (file: File): Promise<PaperOut> => {
+    let res: Response;
+    try {
+      res = await fetch(`/api/papers/upload${q({ filename: file.name })}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/pdf' },
+        body: file,
+      });
+    } catch (e) {
+      throw new ApiError(0, `Backend unreachable (${e instanceof Error ? e.message : String(e)})`);
+    }
+    const data = (await res.json().catch(() => ({}))) as { detail?: string };
+    if (!res.ok) throw new ApiError(res.status, data.detail ?? `${res.status} ${res.statusText}`);
+    return data as unknown as PaperOut;
+  },
+  refreshPaperSources: (id: string) => request<PaperDetail>('POST', `/api/papers/${encodeURIComponent(id)}/sources/refresh`),
+  startPaperSession: (id: string) => request<SessionState>('POST', `/api/papers/${encodeURIComponent(id)}/session`),
 };
+
+/** An arXiv link or id typed into Learn (mirrors backend/papers/fetch.parse_arxiv_ref). */
+export function arxivRef(text: string): string | null {
+  const t = text.trim();
+  const id = String.raw`(\d{4}\.\d{4,5}|[a-z][a-z\-]+(?:\.[A-Z]{2})?\/\d{7})(v\d+)?`;
+  const m =
+    new RegExp(String.raw`arxiv\.org\/(?:abs|pdf|html)\/` + id, 'i').exec(t) ??
+    new RegExp(String.raw`\barxiv\s*:\s*` + id, 'i').exec(t) ??
+    new RegExp('^' + id + String.raw`(?:\.pdf)?$`).exec(t);
+  return m ? m[1] + (m[2] ?? '') : null;
+}
 
 // =================================================================== state types
 /** 1 Learn · 2 Review · 3 Map */
@@ -140,6 +174,7 @@ export type ModalState =
   | { kind: 'artifact'; id: string }
   | { kind: 'scratch' }
   | { kind: 'settings' }
+  | { kind: 'paper'; id: string }
   | { kind: 'dispatch'; agent: AgentName }
   | null;
 
@@ -267,6 +302,10 @@ export interface HarnessState {
   openFile: WorkspaceFileContent | null;
   settings: SettingsOut | null;
   nodeDetails: Record<string, NodeDetail>;
+  papers: PaperOut[];
+  paperDetails: Record<string, PaperDetail>;
+  /** A paper being fetched/mapped that should open as a session once it is ready. */
+  pendingPaperId: string | null;
   // session
   activeSessionId: string | null;
   sessionState: SessionState | null;
@@ -316,6 +355,10 @@ export interface HarnessState {
   refreshFiles: () => Promise<void>;
   refreshScratch: () => Promise<void>;
   refreshSettings: () => Promise<void>;
+  refreshPapers: () => Promise<void>;
+  fetchPaper: (id: string) => Promise<PaperDetail | null>;
+  addPaper: (src: PaperCreate | File) => Promise<PaperOut | null>;
+  startPaperSession: (id: string) => Promise<SessionState | null>;
   fetchNodeDetail: (id: string) => Promise<NodeDetail | null>;
   fetchArtifact: (id: string) => Promise<ArtifactOut | null>;
   openWorkspaceFile: (path: string) => Promise<void>;
@@ -354,7 +397,7 @@ let pingSentAt = 0;
 let initialised = false;
 let toastSeq = 1;
 let refreshTimer: number | null = null;
-type RefreshKey = 'graph' | 'stats' | 'due' | 'queue' | 'sessions' | 'session' | 'files' | 'node' | 'artifacts';
+type RefreshKey = 'graph' | 'stats' | 'due' | 'queue' | 'sessions' | 'session' | 'files' | 'node' | 'artifacts' | 'papers';
 const pendingRefresh = new Set<RefreshKey>();
 
 export function sendWs(msg: WsClientMessage): boolean {
@@ -424,6 +467,10 @@ export const useHarnessStore = create<HarnessState>()((set, get) => {
       if (ks.has('sessions')) void s.refreshSessions();
       if (ks.has('files')) void s.refreshFiles();
       if (ks.has('artifacts')) void s.refreshArtifacts();
+      if (ks.has('papers')) {
+        void s.refreshPapers();
+        if (s.modal?.kind === 'paper') void s.fetchPaper(s.modal.id);
+      }
       if (ks.has('session') && s.activeSessionId) {
         void guard(() => api.session(s.activeSessionId as string), 'Refresh session').then((st) => {
           if (st && st.session.id === get().activeSessionId) applySession(st);
@@ -488,6 +535,21 @@ export const useHarnessStore = create<HarnessState>()((set, get) => {
       case 'pong':
         if (pingSentAt) set({ wsLatencyMs: Math.round(performance.now() - pingSentAt) });
         break;
+      case 'paper_progress': {
+        const p = ev.payload as unknown as WsPayloads['paper_progress'];
+        set((st) => ({ papers: st.papers.map((x) => (x.id === p.paper_id ? { ...x, status: p.status, status_detail: p.detail } : x)) }));
+        scheduleRefresh('papers');
+        if (p.paper_id === s.pendingPaperId) {
+          if (p.status === 'MAPPED') {
+            set({ pendingPaperId: null });
+            void s.startPaperSession(p.paper_id);
+          } else if (p.status === 'FAILED') {
+            set({ pendingPaperId: null });
+            s.toast('error', `Couldn't read that paper: ${p.detail}`);
+          }
+        }
+        break;
+      }
       case 'engine_attention': {
         const p = ev.payload as unknown as WsPayloads['engine_attention'];
         const who = p.engine === 'chatgpt_browser' ? 'ChatGPT needs you in the Pólya browser window' : `${p.engine} needs your attention`;
@@ -577,6 +639,9 @@ export const useHarnessStore = create<HarnessState>()((set, get) => {
     openFile: null,
     settings: null,
     nodeDetails: {},
+    papers: [],
+    paperDetails: {},
+    pendingPaperId: null,
     activeSessionId: null,
     sessionState: null,
     lastResult: null,
@@ -625,6 +690,7 @@ export const useHarnessStore = create<HarnessState>()((set, get) => {
       void s.refreshFiles();
       void s.refreshScratch();
       void s.refreshSettings();
+      void s.refreshPapers();
       void s.refreshDue();
       void s.refreshQueue();
       const last = lsGet(LS_SESSION);
@@ -711,6 +777,38 @@ export const useHarnessStore = create<HarnessState>()((set, get) => {
         set({ settings: st, llmEngine: st.active_engine || get().llmEngine });
         prosodyEngine.deepgramHint = st.deepgram_available || st.native_dictation_available;
       }
+    },
+    refreshPapers: async () => {
+      const ps = await guard(() => api.papers(), 'Load papers');
+      if (ps) set({ papers: ps });
+    },
+    fetchPaper: async (id) => {
+      const d = await guard(() => api.paper(id), 'Load paper');
+      if (d) set((s) => ({ paperDetails: { ...s.paperDetails, [id]: d } }));
+      return d;
+    },
+    addPaper: async (src) => {
+      const p = await guard(() => (src instanceof File ? api.uploadPaper(src) : api.createPaper(src)), 'Add paper', 'create');
+      if (!p) return null;
+      set((s) => ({ papers: [p, ...s.papers.filter((x) => x.id !== p.id)] }));
+      if (p.status === 'MAPPED') void get().startPaperSession(p.id);
+      else {
+        set({ pendingPaperId: p.id });
+        get().toast('info', 'Reading the paper. Mapping it takes a minute or three; it opens by itself when ready.');
+      }
+      return p;
+    },
+    startPaperSession: async (id) => {
+      const paper = get().papers.find((x) => x.id === id);
+      set({ focusOpen: true, creatingGoal: paper?.title ?? 'Your paper', held: null, modal: null });
+      const st = await guard(() => api.startPaperSession(id), 'Start reading', 'create');
+      set({ creatingGoal: null });
+      if (st) {
+        applySession(st);
+        set({ lastResult: null, focusOpen: true });
+        scheduleRefresh('sessions', 'papers');
+      } else set({ focusOpen: false });
+      return st;
     },
     fetchNodeDetail: async (id) => {
       const d = await guard(() => api.node(id), 'Load node');
