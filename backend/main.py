@@ -6,7 +6,7 @@ import json
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import cognitive_math as cm
@@ -16,10 +16,12 @@ from .config import settings
 from .hub import hub
 from .models import (
     ALL_AGENTS, ArtifactOut, ChunkEvaluation, ChunkRequest, CreateSessionRequest, DemoTelemetry, DuelReply, DuelRequest,
-    DueItem, GraphOut, HintOut, HintRequest, ModelEvalOut, NodeDetail, PracticeQueueItem, ScratchOut, ScratchWrite, SessionOut,
+    DueItem, GraphOut, HintOut, HintRequest, ModelEvalOut, NodeDetail, PaperCreate, PaperDetail, PaperOut, PracticeQueueItem,
+    ScratchOut, ScratchWrite, SessionOut,
     SessionState, SettingsOut, SettingsUpdate, StatsOut, StepResult, StepSubmission, SubagentRunRequest, WorkspaceFile,
     WorkspaceFileContent,
 )
+from .papers import service as papers
 from .scratchpad_watcher import watcher
 
 
@@ -329,6 +331,55 @@ async def put_settings(req: SettingsUpdate) -> dict[str, Any]:
     out = _settings_out()
     await hub.broadcast("stats", compute_stats())
     return out
+
+
+# ------------------------------------------------------------------ research papers (docs/specs/paper-reading)
+@app.get("/api/papers", response_model=list[PaperOut])
+async def list_papers() -> list[dict[str, Any]]:
+    with db.ro() as conn:
+        return [papers.paper_out(conn, p) for p in papers.all_papers(conn)]
+
+
+@app.post("/api/papers", response_model=PaperOut)
+async def create_paper(req: PaperCreate) -> dict[str, Any]:
+    p = await papers.create(arxiv=req.arxiv or "", workspace_path=req.workspace_path or "")
+    with db.ro() as conn:
+        return papers.paper_out(conn, p)
+
+
+@app.post("/api/papers/upload", response_model=PaperOut)
+async def upload_paper(request: Request, filename: str = Query("paper.pdf")) -> dict[str, Any]:
+    """Body = the PDF bytes (Content-Type application/pdf)."""
+    data = await request.body()
+    if len(data) > 60 * 1024 * 1024:
+        raise HTTPException(413, "PDF larger than 60 MB")
+    p = await papers.create(upload=(filename, data))
+    with db.ro() as conn:
+        return papers.paper_out(conn, p)
+
+
+@app.get("/api/papers/{paper_id}", response_model=PaperDetail)
+async def get_paper(paper_id: str) -> dict[str, Any]:
+    with db.ro() as conn:
+        p = papers.get(conn, paper_id)
+        if not p:
+            raise HTTPException(404, "paper not found")
+        return papers.paper_detail(conn, p)
+
+
+@app.post("/api/papers/{paper_id}/sources/refresh", response_model=PaperDetail)
+async def refresh_paper_sources(paper_id: str) -> dict[str, Any]:
+    with db.ro() as conn:
+        if not papers.get(conn, paper_id):
+            raise HTTPException(404, "paper not found")
+    await papers.refresh_sources(paper_id)
+    with db.ro() as conn:
+        return papers.paper_detail(conn, papers.get(conn, paper_id))
+
+
+@app.post("/api/papers/{paper_id}/session", response_model=SessionState)
+async def start_paper_session(paper_id: str) -> dict[str, Any]:
+    return await orchestrator.create_paper_session(paper_id)
 
 
 @app.post("/api/engines/chatgpt-browser/login")

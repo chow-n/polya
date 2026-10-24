@@ -1,0 +1,14 @@
+\begin{thebibliography}{3}
+\bibitem[Banach(1922)]{banach1922}
+Stefan Banach.
+\newblock Sur les op\'erations dans les ensembles abstraits.
+\newblock {\em Fundamenta Mathematicae}, 3:133--181, 1922.
+\bibitem[Bellman(1957)]{bellman1957}
+Richard Bellman.
+\newblock Dynamic Programming.
+\newblock Princeton University Press, 1957.
+\bibitem[Sutton and Barto(2018)]{sutton2018}
+Richard~S. Sutton and Andrew~G. Barto.
+\newblock Reinforcement Learning: An Introduction.
+\newblock MIT Press, 2018. arXiv:1234.56789.
+\end{thebibliography}

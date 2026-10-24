@@ -19,6 +19,8 @@ from .. import cognitive_math as cm
 from .. import config, db, demos, llm, tools
 from ..hub import hub
 from ..models import LLMStepContent
+from ..papers import mapper as paper_mapper
+from ..papers import service as papers
 from . import prompts, subagents
 from .content_bank import CONTENT
 
@@ -169,11 +171,44 @@ def _payload(session: dict[str, Any], kind: str, phase: Optional[str], node: Opt
     return p
 
 
+# ------------------------------------------------------------------ paper grounding (docs/specs/paper-reading FR5)
+_paper_norm_cache: dict[str, str] = {}
+
+
+def paper_link(node_id: str) -> Optional[dict[str, Any]]:
+    with db.ro() as conn:
+        return papers.paper_for_node(conn, node_id)
+
+
+def paper_context(node: dict[str, Any]) -> str:
+    """For an idea that came from a paper: the anchored passage, the verbatim quote and the paper's notation."""
+    link = paper_link(node["id"])
+    if not link:
+        return ""
+    doc = papers.load_doc(link["paper_id"])
+    passage = paper_mapper.passage_for(doc, link["anchor"], link["quote"]) if doc else ""
+    return prompts.paper_grounding(link["paper"]["title"], link["anchor"], link["quote"], passage,
+                                   link["paper"]["map"].get("notation"))
+
+
+def ground_check(body: str, paper_id: str) -> str:
+    """Flag quoted lines (> …) that do not occur in the paper, so a paraphrase is never presented as the paper's words."""
+    if paper_id not in _paper_norm_cache:
+        doc = papers.load_doc(paper_id)
+        _paper_norm_cache[paper_id] = paper_mapper._norm(doc.full_text() + " " + " ".join(b.body for b in doc.blocks)) if doc else ""
+    norm = _paper_norm_cache[paper_id]
+    quoted = [re.sub(r"\(?§[^)]*\)\s*$|—.*$", "", ln.lstrip("> ").strip()) for ln in body.splitlines() if ln.lstrip().startswith(">")]
+    bad = [q for q in quoted if len(q) > 25 and norm and not paper_mapper.quote_in_text(q, norm)]
+    if bad:
+        body += "\n\n*One quoted line above could not be found in the paper; read it as a paraphrase.*"
+    return body
+
+
 async def _llm_step(mode_key: str, node: dict[str, Any], session: dict[str, Any], extra: str = "") -> Optional[LLMStepContent]:
     res = await llm.complete_json(
         prompts.MODE_PROMPTS[mode_key],
         prompts.node_context(node) + "\n" + prompts.delta_instruction(session["step_velocity_delta"]) +
-        f"\nSession goal: {session['target_goal']}\n{extra}", max_tokens=1800)
+        f"\nSession goal: {session['target_goal']}\n{extra}" + paper_context(node), max_tokens=1800)
     if not res.data:
         return None
     try:
@@ -244,6 +279,11 @@ async def step_reading(session: dict[str, Any], node: dict[str, Any], conn, comp
     c, _ = content_for(node, conn)
     llm_c = await _llm_step("READING", node, session)
     body = llm_c.body_markdown if (llm_c and llm_c.body_markdown) else c["reading"]
+    link = paper_link(node["id"])
+    if link and llm_c and llm_c.body_markdown:
+        body = ground_check(body, link["paper_id"])
+    elif link and link["quote"]:
+        body = f"> {link['quote']}\n>\n> — *{link['paper']['title']}*, § {link['anchor']}\n\n{body}"
     demo_id, svg_id = await _visual_for(session, node, conn)
     note = ("Δ ≥ 1.5: trivial algebraic bridges compressed — the prediction step was skipped." if compressed else
             "Highlight any sentence or click any equation to attach a thinking-while-reading note.")
@@ -283,8 +323,8 @@ async def step_practice(session: dict[str, Any], node: dict[str, Any], conn, cue
         prompt = f"**{problem['title'] or 'Imported problem'}** (from `{problem['path']}`:{problem['line']})\n\n{problem['body']}"
     else:
         res = await llm.complete_json(prompts.MODE_PROMPTS["PRACTICE"], prompts.node_context(node) +
-                                      f"\nCue level: {cue_level}\n" + prompts.delta_instruction(session["step_velocity_delta"]),
-                                      max_tokens=1800)
+                                      f"\nCue level: {cue_level}\n" + prompts.delta_instruction(session["step_velocity_delta"]) +
+                                      paper_context(node), max_tokens=1800)
         d = res.data or {}
         if isinstance(d.get("prompt_latex"), str) and isinstance(d.get("concept_groups"), list) and d["concept_groups"]:
             prompt, answer = d["prompt_latex"], str(d.get("answer_summary", answer))
@@ -347,6 +387,168 @@ def step_complete(session: dict[str, Any]) -> dict[str, Any]:
                     rationale="Spaced retrieval will bring these nodes back when they enter the Bjork window.")
 
 
+# ------------------------------------------------------------------ paper sessions (docs/specs/paper-reading FR5)
+def _paper(conn, session: dict[str, Any]) -> dict[str, Any]:
+    p = papers.get(conn, session.get("_controller", {}).get("paper_id", ""))
+    if not p:
+        raise HTTPException(404, "paper not found")
+    return p
+
+
+def _main_node_id(conn, paper: dict[str, Any], plan: list[dict[str, Any]]) -> str:
+    return next((l["node_id"] for l in papers.links(conn, paper["id"]) if l["role"] == "main_result"), plan[-1]["node_id"])
+
+
+def step_skim(session: dict[str, Any], paper: dict[str, Any], node: dict[str, Any]) -> dict[str, Any]:
+    doc = papers.load_doc(paper["id"])
+    secs = [x.title for x in doc.sections if x.level == 1][:14] if doc else []
+    abstract = paper["abstract"] or (doc.abstract if doc else "")
+    prompt = ("**Pass 1 · skim.** From the abstract and the section list alone: what do you think the main result is, "
+              "and what would have to be true for it to hold? Write your own guess; you'll see it again at the end.\n\n"
+              f"> {abstract}\n\n" + ("**Sections:** " + " · ".join(secs) if secs else ""))
+    return _payload(session, "PREDICT", "PREDICT", node, title=f"Skim · {paper['title'][:90]}", prompt_latex=prompt,
+                    requires_raw_prediction=True, generated_by="deterministic",
+                    rationale="Three-pass reading (Keshav 2007), pass 1: commit to a guess about the contribution before "
+                              "reading the details. Pretesting improves what you take from the reading.",
+                    _meta={"paper_skim": True, "hist_kind": "SKIM"})
+
+
+async def step_paper_referee(session: dict[str, Any], node: dict[str, Any], paper: dict[str, Any]) -> Optional[dict[str, Any]]:
+    ka = paper["map"].get("key_argument") or {}
+    if not ka.get("steps"):
+        return None
+    assumptions = "; ".join(a["label"] for a in paper["map"].get("assumptions_for_main", []))
+    res = await llm.complete_json(prompts.PAPER_REFEREE,
+                                  f"Paper: {paper['title']}\nCentral claim: {ka.get('claim', '')}\nArgument steps:\n" +
+                                  "\n".join(f"{i + 1}. {st}" for i, st in enumerate(ka["steps"])) +
+                                  f"\nAssumptions the result needs: {assumptions}", max_tokens=2000)
+    d = res.data or {}
+    if not (isinstance(d.get("steps"), list) and len(d["steps"]) == 5 and isinstance(d.get("flawed_index"), int)
+            and 1 <= d["flawed_index"] <= 5):
+        return None
+    return _payload(session, "REFEREE", "REFEREE", node, title=f"Find the flaw · {paper['title'][:80]}",
+                    prompt_latex=f"**The paper's argument, with one step altered.** {d.get('claim') or ka.get('claim', '')}\n\n"
+                                 "Exactly one step below no longer follows. Click it, name what it breaks, and give a case "
+                                 "where it fails.",
+                    proof_steps=[{"index": i + 1, "text_latex": str(st)} for i, st in enumerate(d["steps"])],
+                    cue_level=4, generated_by="llm",
+                    rationale="Pass 3 · critical reading: re-derive the paper's key argument well enough to spot a planted flaw.",
+                    _meta={"flawed_index": d["flawed_index"], "violated_keywords": [str(k) for k in d.get("violated_keywords", [])] or ["assumption"],
+                           "explanation": str(d.get("explanation", "")), "counterexample": str(d.get("counterexample", ""))})
+
+
+def step_paper_feynman(session: dict[str, Any], node: dict[str, Any], paper: dict[str, Any]) -> Optional[dict[str, Any]]:
+    assumptions = paper["map"].get("assumptions_for_main") or []
+    if not assumptions:
+        return None
+    conds = [{"id": f"a{i + 1}", "label": a["label"], "keywords": a["keywords"], "challenge": a["challenge"]}
+             for i, a in enumerate(assumptions)]
+    claim = (paper["map"].get("key_argument") or {}).get("claim") or node["title"]
+    persona = ("A student who only read the abstract and believes the paper's main result holds with no conditions at all; "
+               "they push on every edge case until you state each assumption precisely.")
+    opening = f"I skimmed it: {claim} So that just always works, right? Why would anyone need conditions?"
+    return _payload(session, "FEYNMAN", "REFEREE", node, title=f"Explain it · {paper['title'][:80]}",
+                    prompt_latex=f"Explain the paper's main result to a sceptical student until they run out of edge cases.",
+                    student_persona=persona, duel_transcript=[{"role": "student", "text": opening, "timestamp_ms": 0}],
+                    boundary_conditions_total=len(conds), boundary_conditions_met=[], cue_level=4, generated_by="llm",
+                    rationale="Pass 3 · explaining the result forces you to state every assumption it needs.",
+                    _meta={"conditions": conds, "persona": persona})
+
+
+def step_paper_complete(session: dict[str, Any], paper: dict[str, Any], conn) -> dict[str, Any]:
+    u = papers.understanding(conn, paper["id"])
+    contributions = paper["map"].get("contributions") or [paper["map"].get("summary", "")]
+    top = papers.refs(conn, paper["id"])["reference"][:3]
+    parts = []
+    if paper["first_guess"]:
+        parts.append(f"**Your first guess**\n\n> {paper['first_guess']}")
+    parts.append("**What the paper shows**\n\n" + "\n".join(f"- {c}" for c in contributions if c))
+    if u is not None:
+        parts.append(f"**You now understand about {round(u * 100)}% of this paper's ideas.** Its key claims join your reviews.")
+    if top:
+        parts.append("**Read next**\n\n" + "\n".join(f"{i + 1}. {r['title']} — {r['why']}" for i, r in enumerate(top)))
+    return _payload(session, "COMPLETE", None, None, title="Paper complete", body_markdown="\n\n".join(parts),
+                    rationale="Sources are re-ranked against what you missed; open the paper for the full list.")
+
+
+async def _paper_next(session: dict[str, Any], conn, meta: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """Skim first, then probe the prerequisites; teaching then follows the normal predict → read → check loop."""
+    paper = _paper(conn, session)
+    plan, hist = session["dependency_plan"], session["history_steps"]
+    if not meta.get("skim_done"):
+        meta["skim_done"] = True
+        return step_skim(session, paper, _node(conn, _main_node_id(conn, paper, plan)))
+    if not meta.get("probing_done"):
+        prereq = {l["node_id"] for l in papers.links(conn, paper["id"]) if l["role"] == "prerequisite"}
+        sub = [p for p in plan if p["node_id"] in prereq]
+        probed = [p["node_id"] for p in sub if p["status"] != "pending"]
+        if sub and sum(1 for h in hist if h["kind"] == "PROBE") < MAX_PROBES:
+            v, table = cm.select_next_probe_node({p["node_id"]: p["belief"] for p in sub}, plan_edges(conn, sub), probed)
+            if v and table and table[0].eig >= 0.25:
+                rows = [{"node_id": e.node_id, "title": next(p["title"] for p in sub if p["node_id"] == e.node_id),
+                         "p_mastery": e.p_mastery, "entropy": e.entropy, "unprobed_ancestors": e.unprobed_ancestors,
+                         "unprobed_descendants": e.unprobed_descendants, "eig": e.eig} for e in table]
+                return await step_probe(session, _node(conn, v), rows, conn)
+        meta["probing_done"] = True
+        for p in sub:
+            if p["status"] == "pending" and p["belief"] >= 0.85:
+                p["status"] = "probed_mastered"
+    return None
+
+
+async def _paper_finale(session: dict[str, Any], conn, meta: dict[str, Any]) -> dict[str, Any]:
+    paper = _paper(conn, session)
+    node = _node(conn, _main_node_id(conn, paper, session["dependency_plan"]))
+    if not meta.get("referee_done"):
+        meta["referee_done"] = True
+        st = await step_paper_referee(session, node, paper)
+        if st:
+            return st
+    if not meta.get("feynman_done"):
+        meta["feynman_done"] = True
+        st = step_paper_feynman(session, node, paper)
+        if st:
+            return st
+    return step_paper_complete(session, paper, conn)
+
+
+async def create_paper_session(paper_id: str) -> dict[str, Any]:
+    """Start (or resume) reading a mapped paper: prerequisites first, then its ideas in dependency order."""
+    with db.ro() as conn:
+        paper = papers.get(conn, paper_id)
+        if not paper:
+            raise HTTPException(404, "paper not found")
+        if paper["status"] != "MAPPED":
+            raise HTTPException(409, f"the paper is not ready yet ({paper['status'].lower()})")
+        if paper["session_id"]:
+            old = db.load_session(conn, paper["session_id"])
+            if old and old["status"] == "ACTIVE":
+                return session_state(conn, old)
+        ls = papers.links(conn, paper_id)
+        nodes = {l["node_id"]: _node(conn, l["node_id"]) for l in ls}
+    prereq = [l for l in ls if l["role"] == "prerequisite"][:5]
+    ideas = sorted((l for l in ls if l["role"] != "prerequisite"),
+                   key=lambda l: (papers.ROLE_ORDER[l["role"]], nodes[l["node_id"]]["logical_depth"], l["ord"]))[:10]
+    plan = [{"node_id": l["node_id"], "title": nodes[l["node_id"]]["title"], "depth": nodes[l["node_id"]]["logical_depth"],
+             "status": "pending", "remedial": False, "spliced_reason": "", "belief": nodes[l["node_id"]]["bkt_p_mastery"],
+             "attempts": 0} for l in prereq + ideas]
+    sid = db.new_id("sess")
+    session = {"id": sid, "title": f"Read: {paper['title'][:70]}", "mode": "PROBE", "sub_mode": "PAPER",
+               "target_goal": paper["title"], "attached_files": [], "step_velocity_delta": 1.0, "current_step_index": 0,
+               "dependency_plan": plan, "active_step": {}, "history_steps": [], "status": "ACTIVE",
+               "_controller": {"cue_level": 1, "pair_for": {}, "paper_id": paper_id}}
+    with db.tx() as conn:
+        db.insert_session(conn, session)
+        papers.update(conn, paper_id, session_id=sid)
+    with db.ro() as conn:
+        session["active_step"] = await decide_next(session, conn)
+    with db.tx() as conn:
+        _persist(conn, session)
+        state = session_state(conn, session)
+    await hub.broadcast("session_updated", {"session_id": sid})
+    return state
+
+
 # ------------------------------------------------------------------ decide next step
 def _node(conn, nid: str) -> dict[str, Any]:
     n = db.get_node(conn, nid)
@@ -385,6 +587,10 @@ async def decide_next(session: dict[str, Any], conn) -> dict[str, Any]:
         return await (step_feynman(session, node, conn) if sub == "FEYNMAN_STUDENT" else step_referee(session, node, conn))
 
     # teaching modes
+    if sub == "PAPER":
+        st = await _paper_next(session, conn, meta)
+        if st:
+            return st
     if mode == "PRODUCTIVE_FAILURE" and not any(h["kind"] == "PRODUCTIVE_FAILURE" for h in hist):
         return await step_productive_failure(session, _node(conn, plan[-1]["node_id"]), conn)
 
@@ -410,7 +616,7 @@ async def decide_next(session: dict[str, Any], conn) -> dict[str, Any]:
 
     item = next((p for p in plan if p["status"] in ("pending", "probed_unmastered", "active")), None)
     if not item:
-        return step_complete(session)
+        return await _paper_finale(session, conn, meta) if sub == "PAPER" else step_complete(session)
     item["status"] = "active"
     node = _node(conn, item["node_id"])
     delta = session["step_velocity_delta"]
@@ -675,11 +881,15 @@ async def submit(session_id: str, sub: dict[str, Any]) -> dict[str, Any]:
                                     "bkt_mastery_before": node["bkt_p_mastery"], "bkt_mastery_after": node["bkt_p_mastery"],
                                     "fsrs_stability_before": node["fsrs_stability"], "fsrs_stability_after": node["fsrs_stability"]}
     diag_md = ""
-    hist_entry: dict[str, Any] = {"kind": kind, "node_id": node_id, "step_index": active["step_index"]}
+    hist_entry: dict[str, Any] = {"kind": meta.get("hist_kind", kind), "node_id": node_id, "step_index": active["step_index"]}
 
     if kind in ("PREDICT", "READING", "PRODUCTIVE_FAILURE"):
         if kind == "PRODUCTIVE_FAILURE":
             feedback.append(f"**Your attempts are logged.** Canonical insight to compare against:\n\n{meta.get('insight', '')}")
+        elif meta.get("paper_skim"):
+            with db.tx() as conn:
+                papers.update(conn, session["_controller"]["paper_id"], first_guess=sub.get("raw_prediction_locked", "")[:2000])
+            feedback.append("Guess kept. You'll compare it with what the paper actually shows at the end.")
         elif kind == "PREDICT":
             feedback.append("Prediction locked. Read the next step and check it against what you predicted.")
         else:
@@ -843,6 +1053,8 @@ async def submit(session_id: str, sub: dict[str, Any]) -> dict[str, Any]:
         state = session_state(conn, session)
         trace = db.get_trace(conn, trace_id)
     if session["status"] == "COMPLETED":
+        if session["sub_mode"] == "PAPER":
+            papers.refresh_in_background(session["_controller"]["paper_id"])   # re-rank sources against your misses
         await subagents.ontologist(session_id, session)
         with db.ro() as conn:
             state = session_state(conn, _load(conn, session_id))

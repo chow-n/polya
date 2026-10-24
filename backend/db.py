@@ -148,6 +148,66 @@ CREATE TABLE IF NOT EXISTS model_predictions (
     success INTEGER NOT NULL
 );
 
+-- Side tables (docs/specs/paper-reading D5): papers you read, which ideas came from them, and their sources.
+CREATE TABLE IF NOT EXISTS papers (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,                 -- arxiv | pdf
+    arxiv_id TEXT NOT NULL DEFAULT '',
+    doi TEXT NOT NULL DEFAULT '',
+    s2_id TEXT NOT NULL DEFAULT '',
+    openalex_id TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    authors_json TEXT NOT NULL DEFAULT '[]',
+    year INTEGER,
+    abstract TEXT NOT NULL DEFAULT '',
+    text_kind TEXT NOT NULL DEFAULT '',   -- latex | pdf_text
+    status TEXT NOT NULL CHECK (status IN ('FETCHING', 'PARSED', 'MAPPED', 'FAILED')),
+    status_detail TEXT NOT NULL DEFAULT '',
+    map_json TEXT NOT NULL DEFAULT '{}',
+    map_engine TEXT NOT NULL DEFAULT '',
+    session_id TEXT,
+    first_guess TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS paper_nodes (
+    paper_id TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('prerequisite', 'definition', 'assumption', 'claim', 'main_result')),
+    anchor TEXT NOT NULL DEFAULT '',
+    quote TEXT NOT NULL DEFAULT '',
+    ord INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (paper_id, node_id),
+    FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS paper_refs (
+    id TEXT PRIMARY KEY,
+    paper_id TEXT NOT NULL,
+    direction TEXT NOT NULL CHECK (direction IN ('reference', 'citation', 'explainer')),
+    ref_key TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL,
+    authors TEXT NOT NULL DEFAULT '',
+    year INTEGER,
+    arxiv_id TEXT NOT NULL DEFAULT '',
+    doi TEXT NOT NULL DEFAULT '',
+    s2_id TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL DEFAULT '',
+    contexts_json TEXT NOT NULL DEFAULT '[]',
+    sections_json TEXT NOT NULL DEFAULT '[]',
+    influential INTEGER NOT NULL DEFAULT 0,
+    intents_json TEXT NOT NULL DEFAULT '[]',
+    cited_by_count INTEGER,
+    is_survey INTEGER NOT NULL DEFAULT 0,
+    for_node_id TEXT NOT NULL DEFAULT '',
+    score REAL NOT NULL DEFAULT 0,
+    why TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_paper_nodes_node ON paper_nodes(node_id);
+CREATE INDEX IF NOT EXISTS idx_paper_refs_paper ON paper_refs(paper_id, direction, score);
 CREATE INDEX IF NOT EXISTS idx_traces_session ON telemetry_traces(session_id, step_index);
 CREATE INDEX IF NOT EXISTS idx_edges_conclusion ON hyperedges(conclusion_node_id);
 CREATE INDEX IF NOT EXISTS idx_artifacts_session ON subagent_artifacts(session_id, created_at);

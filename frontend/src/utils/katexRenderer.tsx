@@ -206,6 +206,7 @@ type Block =
   | { kind: 'para'; lines: Line[] }
   | { kind: 'list'; ordered: boolean; items: Line[] }
   | { kind: 'heading'; level: number; line: Line }
+  | { kind: 'quote'; lines: Line[] }
   | { kind: 'display'; tex: string };
 
 function segsToLines(segs: Seg[]): Line[] {
@@ -227,6 +228,7 @@ function segsToLines(segs: Seg[]): Line[] {
 const BULLET_RE = /^\s*([-*•])\s+/;
 const ORDERED_RE = /^\s*(\d+)[.)]\s+/;
 const HEADING_RE = /^\s*(#{1,4})\s+/;
+const QUOTE_RE = /^\s*>\s?/;
 
 function stripLead(line: Line, re: RegExp): Line {
   const first = line[0];
@@ -253,6 +255,11 @@ export function parseBlocks(src: string): Block[] {
     pending = [];
     let para: Line[] = [];
     let list: { ordered: boolean; items: Line[] } | null = null;
+    let quote: Line[] = [];
+    const endQuote = (): void => {
+      if (quote.length) blocks.push({ kind: 'quote', lines: quote });
+      quote = [];
+    };
     const endPara = (): void => {
       if (para.length) blocks.push({ kind: 'para', lines: para });
       para = [];
@@ -265,9 +272,19 @@ export function parseBlocks(src: string): Block[] {
       if (isBlankLine(line)) {
         endPara();
         endList();
+        endQuote();
         continue;
       }
       const lead = lineLead(line);
+      if (QUOTE_RE.test(lead)) {
+        // "> …" lines: a quoted passage (papers are quoted verbatim, with their section)
+        endPara();
+        endList();
+        const rest = stripLead(line, QUOTE_RE);
+        if (!isBlankLine(rest)) quote.push(rest);
+        continue;
+      }
+      endQuote();
       const h = HEADING_RE.exec(lead);
       if (h) {
         endPara();
@@ -295,6 +312,7 @@ export function parseBlocks(src: string): Block[] {
     }
     endPara();
     endList();
+    endQuote();
   };
   for (const s of segs) {
     if (s.kind === 'math' && s.display) {
@@ -446,6 +464,10 @@ function MathTextImpl(props: MathTextProps): JSX.Element {
         });
       } else if (b.kind === 'heading') {
         nodes.push(<strong key={`h${bi}`}>{renderLine(b.line, props, st, `h${bi}`)}</strong>);
+      } else if (b.kind === 'quote') {
+        b.lines.forEach((l, li) => {
+          nodes.push(<q key={`q${bi}-${li}`}>{renderLine(l, props, st, `q${bi}-${li}`)}</q>);
+        });
       } else {
         b.items.forEach((it, ii) => {
           nodes.push(<Fragment key={`l${bi}-${ii}`}>{ii > 0 ? ' · ' : ''}{renderLine(it, props, st, `l${bi}-${ii}`)}</Fragment>);
@@ -474,6 +496,17 @@ function MathTextImpl(props: MathTextProps): JSX.Element {
               <div key={bi} className={`md-h md-h${b.level}`}>
                 {renderLine(b.line, props, st, `h${bi}`)}
               </div>
+            );
+          case 'quote':
+            return (
+              <blockquote key={bi} className="md-quote">
+                {b.lines.map((l, li) => (
+                  <Fragment key={li}>
+                    {li > 0 ? <br /> : null}
+                    {renderLine(l, props, st, `q${bi}-${li}`)}
+                  </Fragment>
+                ))}
+              </blockquote>
             );
           case 'list': {
             const items = b.items.map((it, ii) => <li key={ii}>{renderLine(it, props, st, `l${bi}-${ii}`)}</li>);

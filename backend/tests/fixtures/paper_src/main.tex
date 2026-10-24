@@ -1,0 +1,21 @@
+\documentclass{article}
+\usepackage{amsthm}
+\newtheorem{thm}{Theorem}
+\newtheorem{assump}{Assumption}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\dist}[2]{d(#1, #2)}
+\title{A Toy Paper on Contractions}
+\begin{document}
+\maketitle
+\begin{abstract}
+We show that every contraction on a complete metric space has a unique fixed point, and that value iteration
+converges geometrically.
+\end{abstract}
+\section{Introduction}
+Fixed points appear everywhere in reinforcement learning \cite{bellman1957,sutton2018}. % an aside \cite{ignored}
+\section{Related Work}
+Banach first proved this result \citep{banach1922}.
+\input{sections/method}
+\bibliographystyle{plain}
+\bibliography{refs}
+\end{document}

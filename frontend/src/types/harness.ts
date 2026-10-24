@@ -11,7 +11,7 @@
 export type NodeType = 'AXIOM' | 'PROPOSITION' | 'MOVE' | 'COUNTEREXAMPLE' | 'INTUITION' | 'BUGGY_RULE';
 export type EdgeType = 'DEDUCTION' | 'CONTRASTIVE' | 'ISOMORPHISM' | 'CUE_TRIGGER';
 export type SessionMode = 'PROBE' | 'PRODUCTIVE_FAILURE' | 'TEACH' | 'PRACTICE' | 'REFEREE_DUEL';
-export type SubMode = 'STANDARD' | 'PROOF_REFEREE' | 'FEYNMAN_STUDENT';
+export type SubMode = 'STANDARD' | 'PROOF_REFEREE' | 'FEYNMAN_STUDENT' | 'PAPER';
 export type Phase = 'PROBE' | 'PRODUCTIVE_FAILURE' | 'PREDICT' | 'READING' | 'CHECK' | 'PRACTICE_CHUNK' | 'REFEREE';
 export type StepKind =
   | 'PROBE'

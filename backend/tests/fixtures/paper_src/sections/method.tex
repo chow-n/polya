@@ -1,0 +1,14 @@
+\section{Method}
+\begin{definition}[Contraction]\label{def:contraction}
+A map $T: X \to X$ is a $\gamma$-contraction if $d(Tx, Ty) \le \gamma d(x,y)$ for all $x, y$ with $\gamma < 1$.
+\end{definition}
+\begin{assump}\label{as:complete}
+The metric space $(X, d)$ is complete.
+\end{assump}
+\begin{thm}[Banach]\label{thm:main}
+Under the assumption above, every $\gamma$-contraction has a unique fixed point $x^* \in \R$.
+\end{thm}
+\begin{proof}
+Iterate $x_{k+1} = T x_k$; the sequence is Cauchy since $d(x_{k+1}, x_k) \le \gamma^k d(x_1, x_0)$, as in \cite{banach1922}.
+\end{proof}
+We use the operator view of \citet{bellman1957} throughout the proof. The rate is geometric.

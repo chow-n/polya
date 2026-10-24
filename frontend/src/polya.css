@@ -2492,3 +2492,12 @@ textarea.code,
   border-radius: var(--r-field);
   padding: 6px 10px;
 }
+
+/* ------------------------------------------------------------------ quoted passages (paper-reading) */
+.mathtext .md-quote {
+  margin: 0.6em 0;
+  padding: 0.35em 0 0.35em 14px;
+  border-left: 3px solid var(--accent);
+  color: var(--ink);
+  font-style: italic;
+}

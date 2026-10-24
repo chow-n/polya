@@ -246,7 +246,7 @@ async def _gemini(system: str, user: str, max_tokens: int) -> str:
         return "".join(p.get("text", "") for p in parts)
 
 
-async def _claude_cli(system: str, user: str) -> str:
+async def _claude_cli(system: str, user: str, timeout: Optional[float] = None) -> str:
     exe = settings.claude_cli_path()
     if not exe:
         raise RuntimeError("claude CLI not on PATH")
@@ -257,7 +257,7 @@ async def _claude_cli(system: str, user: str) -> str:
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env, cwd=str(config.WORKSPACE),
     )
     try:
-        out, err = await asyncio.wait_for(proc.communicate(prompt.encode()), timeout=config.CLAUDE_CLI_TIMEOUT_S)
+        out, err = await asyncio.wait_for(proc.communicate(prompt.encode()), timeout=timeout or config.CLAUDE_CLI_TIMEOUT_S)
     except asyncio.TimeoutError:
         proc.kill()
         _trip("claude_cli", "timeout")
@@ -272,7 +272,7 @@ async def _claude_cli(system: str, user: str) -> str:
     return envelope.get("result", "")
 
 
-async def _codex_cli(system: str, user: str) -> str:
+async def _codex_cli(system: str, user: str, timeout: Optional[float] = None) -> str:
     """`codex exec` signed in with the user's ChatGPT plan. Ephemeral, read-only sandbox in an empty temp dir, the
     user's Codex config/hooks/rules ignored, prompt on stdin, final message read from -o (chatgpt-engine FR1)."""
     exe = settings.codex_cli_path()
@@ -288,7 +288,7 @@ async def _codex_cli(system: str, user: str) -> str:
         proc = await asyncio.create_subprocess_exec(*args, "-", stdin=asyncio.subprocess.PIPE,
                                                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, cwd=d)
         try:
-            out, err = await asyncio.wait_for(proc.communicate(prompt.encode()), timeout=config.CODEX_TIMEOUT_S)
+            out, err = await asyncio.wait_for(proc.communicate(prompt.encode()), timeout=timeout or config.CODEX_TIMEOUT_S)
         except asyncio.TimeoutError:
             proc.kill()
             _trip("codex_cli", "timeout")
@@ -313,7 +313,7 @@ async def _local(name: str, system: str, user: str) -> str:
         raise
 
 
-async def _call(engine: str, system: str, user: str, max_tokens: int) -> str:
+async def _call(engine: str, system: str, user: str, max_tokens: int, timeout: Optional[float] = None) -> str:
     if engine == "anthropic":
         return await _anthropic(system, user, max_tokens)
     if engine == "openai":
@@ -325,14 +325,15 @@ async def _call(engine: str, system: str, user: str, max_tokens: int) -> str:
     if engine == "gemini":
         return await _gemini(system, user, max_tokens)
     if engine == "codex_cli":
-        return await _codex_cli(system, user)
+        return await _codex_cli(system, user, timeout)
     if engine in LOCAL_ENGINES:
         return await _local(engine, system, user)
-    return await _claude_cli(system, user)
+    return await _claude_cli(system, user, timeout)
 
 
-async def complete_json(system: str, user: str, max_tokens: int = 2500) -> LLMResult:
-    """Ask the engine chain for a JSON object. `data is None` means: use deterministic content."""
+async def complete_json(system: str, user: str, max_tokens: int = 2500, timeout: Optional[float] = None) -> LLMResult:
+    """Ask the engine chain for a JSON object. `data is None` means: use deterministic content. `timeout` overrides
+    the local CLI engines' default for long answers (the paper mapper)."""
     chain = engine_chain()
     if not chain:
         return LLMResult(None, "deterministic")
@@ -343,7 +344,7 @@ async def complete_json(system: str, user: str, max_tokens: int = 2500) -> LLMRe
     for engine in chain:
         tried.append(engine)
         try:
-            raw = await _call(engine, system, user, max_tokens)
+            raw = await _call(engine, system, user, max_tokens, timeout)
         except Exception as e:  # network, auth, CLI lock, limit, page change: try the next engine
             errors.append(f"{engine}: {str(e)[:300]}")
             continue

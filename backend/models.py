@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 NodeType = Literal["AXIOM", "PROPOSITION", "MOVE", "COUNTEREXAMPLE", "INTUITION", "BUGGY_RULE"]
 EdgeType = Literal["DEDUCTION", "CONTRASTIVE", "ISOMORPHISM", "CUE_TRIGGER"]
 SessionMode = Literal["PROBE", "PRODUCTIVE_FAILURE", "TEACH", "PRACTICE", "REFEREE_DUEL"]
-SubMode = Literal["STANDARD", "PROOF_REFEREE", "FEYNMAN_STUDENT"]
+SubMode = Literal["STANDARD", "PROOF_REFEREE", "FEYNMAN_STUDENT", "PAPER"]   # PAPER: docs/specs/paper-reading
 Phase = Literal["PROBE", "PRODUCTIVE_FAILURE", "PREDICT", "READING", "CHECK", "PRACTICE_CHUNK", "REFEREE"]
 StepKind = Literal[
     "PROBE", "PRODUCTIVE_FAILURE", "PREDICT", "READING", "CHECK", "PRACTICE_CHUNK", "REFEREE", "FEYNMAN", "COMPLETE"
@@ -579,3 +579,89 @@ class LLMOntology(BaseModel):
 
 NodeDetail.model_rebuild()
 StepPayload.model_rebuild()
+
+
+# ------------------------------------------------------------------ research papers (docs/specs/paper-reading)
+PaperStatus = Literal["FETCHING", "PARSED", "MAPPED", "FAILED"]
+PaperRole = Literal["prerequisite", "definition", "assumption", "claim", "main_result"]
+
+
+class PaperCreate(BaseModel):
+    arxiv: Optional[str] = None            # an arXiv link or id
+    workspace_path: Optional[str] = None   # a PDF already in your notes
+
+
+class PaperOut(BaseModel):
+    id: str
+    source: str
+    arxiv_id: str
+    doi: str
+    title: str
+    authors: list[str]
+    year: Optional[int] = None
+    abstract: str
+    text_kind: str
+    status: PaperStatus
+    status_detail: str
+    map_engine: str
+    session_id: Optional[str] = None
+    first_guess: str
+    understanding: Optional[float] = None  # mean mastery over the paper's own ideas
+    idea_count: int
+    partial_map: bool
+    created_at: str
+    updated_at: str
+
+
+class PaperIdeaOut(BaseModel):
+    node_id: str
+    title: str
+    role: PaperRole
+    anchor: str
+    quote: str
+    mastery: float
+    answered: bool
+    node_type: str
+
+
+class PaperSourceOut(BaseModel):
+    id: str
+    direction: Literal["reference", "citation", "explainer"]
+    ref_key: str
+    title: str
+    authors: str
+    year: Optional[int] = None
+    arxiv_id: str
+    doi: str
+    s2_id: str
+    url: str
+    contexts: list[dict[str, str]]
+    sections: list[str]
+    influential: bool
+    intents: list[str]
+    cited_by_count: Optional[int] = None
+    is_survey: bool
+    for_node_id: str
+    score: float
+    why: str
+
+
+class PaperMapOut(BaseModel):
+    summary: str
+    contributions: list[str]
+    notation: list[dict[str, str]]
+    key_argument: Optional[dict[str, Any]] = None
+    quotes_dropped: int
+
+
+class PaperSourcesOut(BaseModel):
+    reference: list[PaperSourceOut]
+    citation: list[PaperSourceOut]
+    explainer: list[PaperSourceOut]
+
+
+class PaperDetail(PaperOut):
+    map: PaperMapOut
+    ideas: list[PaperIdeaOut]
+    sources: PaperSourcesOut
+    links: dict[str, Optional[str]]

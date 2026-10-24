@@ -227,3 +227,60 @@ def node_context(node: dict, neighbors: list[dict] | None = None) -> str:
     for nb in neighbors or []:
         lines.append(f"Neighbour `{nb['id']}` [{nb['node_type']}]: {nb['statement_latex']}")
     return "\n".join(lines)
+
+
+# ------------------------------------------------------------------ research papers (docs/specs/paper-reading)
+PAPER_MAPPER = LEARNER_MODEL_PREAMBLE + r"""
+You are PAPER_MAPPER. You receive a research paper (title, abstract, section list, the key sections and its
+theorem-like blocks) and the ideas the learner's graph already holds. Build the map a learner needs to understand
+this paper deeply:
+
+- 4 to 12 atomic ideas, each with a role:
+  * prerequisite — background the paper assumes but does not teach (reuse an existing node id when one matches);
+  * definition — an object or notion the paper defines;
+  * assumption — a hypothesis the main result needs (state it precisely);
+  * claim — an intermediate result, lemma or design decision with its justification;
+  * main_result — the paper's central contribution (at least one).
+- DEDUCTION edges: which ideas the conclusion rests on (premises ⇒ conclusion), using the idea keys.
+- A notation table: the paper's symbols, what they mean, and the existing node they correspond to (if any).
+- key_argument: the paper's central argument as exactly 5 ordered steps, faithful to the paper.
+- assumptions_for_main: the conditions the main result needs, each with 2–4 lowercase keywords a learner would use
+  when stating it, and the sceptical question it answers.
+
+Grounding rules (non-negotiable): every non-prerequisite idea quotes ONE sentence copied verbatim from the paper text
+you were given (at most 300 characters; no paraphrase, no ellipses) and names its section exactly as listed. If you
+cannot find a verbatim sentence, leave quote empty. Never invent results the paper does not state.
+
+Output JSON contract: {"summary": str (2 plain sentences), "contributions": [str],
+ "ideas": [{"key": str, "title": str, "role": str, "node_type": "AXIOM|PROPOSITION|MOVE|INTUITION|COUNTEREXAMPLE",
+   "statement_latex": str, "intuition_summary": str, "anchor": str, "quote": str, "existing_node_id": str,
+   "concept": str (the standard 1–4 word name a textbook would index it under, e.g. "layer normalization")}],
+ "edges": [{"premises": [str], "conclusion": str, "reasoning": str}],
+ "notation": [{"symbol_latex": str, "meaning": str, "existing_node_id": str}],
+ "key_argument": {"claim": str, "steps": [str, str, str, str, str]},
+ "assumptions_for_main": [{"label": str, "keywords": [str], "challenge": str}]}
+"""
+
+
+def paper_grounding(paper_title: str, anchor: str, quote: str, passage: str, notation: list[dict] | None = None) -> str:
+    """Extra context for a step about an idea that came from a paper: teach FROM the paper, quoting it."""
+    lines = [f"\nThis idea comes from the paper “{paper_title}”, section “{anchor}”."]
+    if quote:
+        lines.append(f"Verbatim sentence from the paper: “{quote}”")
+    if passage:
+        lines.append(f"Surrounding passage (the source of truth; do not contradict it):\n{passage[:3500]}")
+    if notation:
+        lines.append("Paper notation: " + "; ".join(f"{n.get('symbol_latex', '')} = {n.get('meaning', '')}" for n in notation[:10]))
+    lines.append("When you quote the paper, copy its words exactly inside a markdown blockquote (> …) and name the "
+                 "section, e.g. “(§ Method)”. Prefer the paper's own example or setting over a generic one.")
+    return "\n".join(lines)
+
+
+PAPER_REFEREE = CORE_LAWS + r"""
+You are PROOF_REFEREE working on a real paper. You receive the paper's central argument as 5 ordered steps. Rewrite
+them as 5 numbered proof steps that follow the paper faithfully EXCEPT exactly one step, where you plant a subtle,
+realistic fallacy (drop or misuse one of the paper's assumptions, swap a limit and an expectation, confuse
+correlation with independence, …). The other four steps must stay correct.
+Output JSON contract: {"claim": str, "steps": [str, str, str, str, str], "flawed_index": int (1-5),
+ "violated_keywords": [str], "explanation": str, "counterexample": str}
+"""
