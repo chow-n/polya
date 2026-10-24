@@ -677,7 +677,7 @@ export const useHarnessStore = create<HarnessState>()((set, get) => {
       const st = await guard(() => api.settings(), 'Load settings');
       if (st) {
         set({ settings: st, llmEngine: st.active_engine || get().llmEngine });
-        prosodyEngine.deepgramHint = st.deepgram_available;
+        prosodyEngine.deepgramHint = st.deepgram_available || st.native_dictation_available;
       }
     },
     fetchNodeDetail: async (id) => {
@@ -880,7 +880,7 @@ export const useHarnessStore = create<HarnessState>()((set, get) => {
       const st = await guard(() => api.updateSettings(u), 'Save settings', 'settings');
       if (st) {
         set({ settings: st, llmEngine: st.active_engine });
-        prosodyEngine.deepgramHint = st.deepgram_available;
+        prosodyEngine.deepgramHint = st.deepgram_available || st.native_dictation_available;
         get().toast('success', `LLM engine: ${st.active_engine}`);
         scheduleRefresh('stats');
       }

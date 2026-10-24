@@ -157,7 +157,7 @@ export interface ProsodyMetrics {
   hedge_count: number;
   wpm: number;
   hedge_density: number;
-  engine: 'none' | 'browser' | 'deepgram';
+  engine: 'none' | 'browser' | 'deepgram' | 'native';
 }
 
 export interface ReadingNote {
@@ -512,6 +512,7 @@ export interface SettingsOut {
   active_engine: string;
   keys_present: Record<string, boolean>;
   deepgram_available: boolean;
+  native_dictation_available: boolean; // on-device macOS speech, LearnHarness.app only
   claude_cli_available: boolean;
   model_overrides: Record<string, string>;
 }
@@ -578,7 +579,8 @@ export type WsClientMessage = { type: 'ping' } | { type: 'scratch_write'; conten
 /** /ws/dictation server messages. */
 export type DictationMessage =
   | { type: 'transcript'; text: string; is_final: boolean; words: { word: string; start: number; end: number }[] }
-  | { type: 'unavailable' };
+  | { type: 'ready'; engine: 'deepgram' | 'native' }
+  | { type: 'unavailable'; reason?: string };
 
 // ------------------------------------------------------------------ structured LLM I/O (mirrored for completeness)
 export interface LLMStepContent {

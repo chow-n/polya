@@ -24,6 +24,9 @@ def point_config_at(tmp: Path) -> None:
     config.PROBLEMS_DIR = ws / "problems"
     config.SCRATCH_PATH = ws / "scratch.tex"
     config.DB_PATH = tmp / "harness.db"
+    config.HOME = tmp
+    config.LEGACY_DB = tmp / "no-legacy.db"   # never migrate the developer's real database into a test
+    config.SEED_WORKSPACE = REPO_WORKSPACE
 
 
 @pytest.fixture()

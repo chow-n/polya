@@ -8,3 +8,5 @@ harness.db-wal
 harness.db-shm
 .logs/
 workspace/notes/session_*.md
+build/
+macos/dist/

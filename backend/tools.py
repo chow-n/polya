@@ -57,6 +57,16 @@ class VerifyResult:
                 f"# --- stdout ---\n{self.stdout.strip()}\n# --- stderr ---\n{self.stderr.strip()}\n")
 
 
+def verifier_command(full_code: str, frozen: bool | None = None) -> tuple[list[str], str | None]:
+    """(argv, stdin) for the verifier child process: `python -I -c code`, or `<app> --lh-verify` (code on stdin)
+    inside a frozen app bundle."""
+    if frozen is None:
+        frozen = bool(getattr(sys, "frozen", False))
+    if frozen:
+        return [sys.executable, "--lh-verify"], full_code
+    return [sys.executable, "-I", "-c", full_code], None
+
+
 def verify_math_sympy(code: str, timeout: float = config.SYMPY_TIMEOUT_S) -> VerifyResult:
     """Run verification code in a separate restricted interpreter.
 
@@ -67,9 +77,11 @@ def verify_math_sympy(code: str, timeout: float = config.SYMPY_TIMEOUT_S) -> Ver
     env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "LANG", "SYSTEMROOT")}
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["OMP_NUM_THREADS"] = "1"
+    # A PyInstaller app binary cannot run `python -c`; it re-enters macos/launcher.py with --lh-verify instead.
+    argv, stdin = verifier_command(full)
     with tempfile.TemporaryDirectory(prefix="lh_sympy_") as cwd:
         try:
-            proc = subprocess.run([sys.executable, "-I", "-c", full], timeout=timeout, capture_output=True,
+            proc = subprocess.run(argv, input=stdin, timeout=timeout, capture_output=True,
                                   text=True, cwd=cwd, env=env)
         except subprocess.TimeoutExpired as e:
             out = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")

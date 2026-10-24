@@ -50,7 +50,12 @@ Server → client `WsEvent {type, payload, ts}`:
 - `graph_updated` `{reason}` · `session_updated` `{session_id}` · `stats` StatsOut · `notes_changed` `{path}` · `pong` · `error` `{message}`
 Client → server: `{type:"ping"}`, `{type:"scratch_write", content}`.
 
-## WebSocket `/ws/dictation` (Deepgram relay)
-If `DEEPGRAM_API_KEY` is configured: client sends binary audio chunks (MediaRecorder webm/opus); server relays
-to Deepgram `nova-3` and sends back `{type:"transcript", text, is_final, words:[{word,start,end}]}`.
-If not configured: server sends `{type:"unavailable"}` and closes; client uses browser SpeechRecognition.
+## WebSocket `/ws/dictation` (Deepgram relay / on-device macOS speech)
+Engine priority: `DEEPGRAM_API_KEY` set → Deepgram `nova-3` relay; else inside LearnHarness.app
+(`LEARNHARNESS_APP=1`) → on-device `SFSpeechRecognizer` (asks for speech + microphone permission once);
+else `{type:"unavailable", reason}` and close, and the client uses browser SpeechRecognition.
+- First frame on success: `{type:"ready", engine:"deepgram"|"native"}`.
+- Then `{type:"transcript", text, is_final, words:[{word,start,end}]}`; interim frames replace the current
+  segment, final frames commit it.
+- Client → server: binary audio chunks (MediaRecorder; Deepgram only, ignored by the native engine), or `"close"`.
+- `GET /api/settings` reports `deepgram_available` and `native_dictation_available`.

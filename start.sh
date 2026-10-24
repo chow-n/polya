@@ -54,7 +54,8 @@ ${c_b}╭───────────────────────�
   ${c_cy}UI${c_r}          http://localhost:$WEB_PORT
   ${c_cy}API${c_r}         http://localhost:$API_PORT/docs
   ${c_cy}LLM engine${c_r}  $ENGINE
-  ${c_cy}Scratchpad${c_r}  $ROOT/workspace/scratch.tex   ${c_dim}(nvim workspace/scratch.tex — saves stream live)${c_r}
+  ${c_cy}Data home${c_r}   ${LEARNHARNESS_HOME:-$HOME/LearnHarness}  ${c_dim}(harness.db + workspace/)${c_r}
+  ${c_cy}Scratchpad${c_r}  ${LEARNHARNESS_HOME:-$HOME/LearnHarness}/workspace/scratch.tex   ${c_dim}(./harness-cli scratch edit — saves stream live)${c_r}
   ${c_cy}Logs${c_r}        $LOGS/{backend,frontend}.log
 
   ${c_b}./harness-cli${c_r} status   ${c_dim}mastery, Bjork window, calibration${c_r}

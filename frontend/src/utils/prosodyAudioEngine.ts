@@ -125,6 +125,8 @@ export class ProsodyAudioEngine {
   private wantRecognition = false;
   /** Server hint from GET /api/settings (deepgram_available). null = unknown -> probe the relay. */
   deepgramHint: boolean | null = null;
+  /** Which engine answered on /ws/dictation (`ready` frame); Deepgram unless the server says otherwise. */
+  private relayEngine: TranscriptEngine = 'deepgram';
 
   // measurement window (reset per step)
   private recordingStartedAt = 0;
@@ -304,11 +306,12 @@ export class ProsodyAudioEngine {
       }
     }
 
-    // 2. transcript engine: Deepgram relay first, browser recognition as fallback
+    // 2. transcript engine: server relay first (Deepgram, or on-device macOS speech inside LearnHarness.app),
+    //    browser recognition as fallback
     let engine: TranscriptEngine = 'none';
     if (this.stream && this.deepgramHint !== false && typeof MediaRecorder !== 'undefined') {
       const ok = await this.tryDeepgram(this.stream);
-      if (ok) engine = 'deepgram';
+      if (ok) engine = this.relayEngine;
     }
     if (aborted()) return;
     if (engine === 'none' && this.startRecognition()) engine = 'browser';
@@ -502,6 +505,15 @@ export class ProsodyAudioEngine {
             /* ignore */
           }
           done(false);
+          return;
+        }
+        if (msg.type === 'ready') {
+          // server-side engine: Deepgram relay or on-device macOS speech (LearnHarness.app)
+          this.relayEngine = msg.engine;
+          if (settled && this.dictationWs === ws) {
+            this.engine = msg.engine;
+            this.emitState(true);
+          }
           return;
         }
         if (msg.type === 'transcript') {

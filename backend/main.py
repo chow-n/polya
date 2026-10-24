@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnec
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import cognitive_math as cm
-from . import db, llm, seed, tools
+from . import config, db, llm, native_speech, seed, tools
 from .agents import orchestrator, subagents
 from .config import settings
 from .hub import hub
@@ -26,6 +26,8 @@ from .scratchpad_watcher import watcher
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     hub.loop = asyncio.get_running_loop()
+    for line in config.ensure_home(config.DB_PATH, config.WORKSPACE, config.LEGACY_DB, config.SEED_WORKSPACE):
+        print(f"[learnharness] migrated {line}", flush=True)
     db.init_db()
     await seed.seed_if_empty()
     watcher.start()
@@ -71,14 +73,16 @@ def compute_stats() -> dict[str, Any]:
 
 def _settings_out() -> dict[str, Any]:
     return {"provider": settings.provider, "active_engine": llm.describe_engine(), "keys_present": llm.keys_present(),
-            "deepgram_available": bool(settings.keys.get("deepgram")), "claude_cli_available": llm.claude_cli_available(),
+            "deepgram_available": bool(settings.keys.get("deepgram")),
+            "native_dictation_available": native_speech.available(), "claude_cli_available": llm.claude_cli_available(),
             "model_overrides": dict(settings.models)}
 
 
 # ------------------------------------------------------------------ REST
 @app.get("/api/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok", "llm_engine": llm.describe_engine()}
+async def health() -> dict[str, Any]:
+    return {"status": "ok", "llm_engine": llm.describe_engine(), "app_mode": config.APP_MODE,
+            "data_home": str(config.HOME)}
 
 
 @app.get("/api/graph", response_model=GraphOut)
@@ -333,11 +337,16 @@ async def ws_main(ws: WebSocket) -> None:
 
 @app.websocket("/ws/dictation")
 async def ws_dictation(ws: WebSocket) -> None:
-    """Relay browser audio to Deepgram nova-3 when DEEPGRAM_API_KEY is configured."""
+    """Dictation: Deepgram nova-3 relay when DEEPGRAM_API_KEY is set, else on-device macOS speech in the app,
+    else `unavailable` (the browser then uses its own SpeechRecognition)."""
     await ws.accept()
     key = settings.keys.get("deepgram")
     if not key:
-        await ws.send_text(json.dumps({"type": "unavailable", "reason": "DEEPGRAM_API_KEY not configured"}))
+        if native_speech.available():
+            await _native_dictation(ws)
+            return
+        await ws.send_text(json.dumps({"type": "unavailable",
+                                       "reason": "DEEPGRAM_API_KEY not configured; " + native_speech.unavailable_reason()}))
         await ws.close()
         return
     import websockets
@@ -353,6 +362,8 @@ async def ws_dictation(ws: WebSocket) -> None:
         await ws.send_text(json.dumps({"type": "unavailable", "reason": f"Deepgram connection failed: {e}"}))
         await ws.close()
         return
+
+    await ws.send_text(json.dumps({"type": "ready", "engine": "deepgram"}))
 
     async def upstream() -> None:
         try:
@@ -385,3 +396,68 @@ async def ws_dictation(ws: WebSocket) -> None:
             await ws.close()
         except RuntimeError:
             pass
+
+
+async def _native_dictation(ws: WebSocket) -> None:
+    ok, reason = await native_speech.ensure_authorized()
+    if not ok:
+        await ws.send_text(json.dumps({"type": "unavailable", "reason": reason}))
+        await ws.close()
+        return
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    dictation = native_speech.NativeDictation(lambda m: loop.call_soon_threadsafe(queue.put_nowait, m))
+    try:
+        dictation.start()
+    except Exception as e:
+        await ws.send_text(json.dumps({"type": "unavailable", "reason": str(e)}))
+        await ws.close()
+        return
+    await ws.send_text(json.dumps({"type": "ready", "engine": "native"}))
+
+    async def downstream() -> None:
+        while True:
+            await ws.send_text(json.dumps(await queue.get()))
+
+    async def upstream() -> None:   # the client's audio frames are not needed: the mic is captured natively
+        while True:
+            msg = await ws.receive()
+            if msg.get("type") == "websocket.disconnect" or msg.get("text") == "close":
+                return
+
+    down = asyncio.create_task(downstream())
+    try:
+        await upstream()
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+    finally:
+        down.cancel()
+        dictation.stop()
+
+
+# ------------------------------------------------------------------ built frontend (single-process / app mode)
+def mount_frontend(application: FastAPI, dist) -> bool:
+    """Serve frontend/dist at / with SPA fallback; /api and /ws routes registered above take precedence."""
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+
+    index = dist / "index.html"
+    if not index.exists():
+        return False
+    if (dist / "assets").is_dir():
+        application.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
+    root = dist.resolve()
+
+    @application.get("/{full_path:path}", include_in_schema=False)
+    async def spa(full_path: str):
+        if full_path.startswith(("api/", "ws")):
+            raise HTTPException(404, "not found")
+        candidate = (dist / full_path).resolve()
+        if full_path and str(candidate).startswith(str(root)) and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(index)
+
+    return True
+
+
+mount_frontend(app, config.FRONTEND_DIST)

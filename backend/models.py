@@ -118,7 +118,7 @@ class ProsodyMetrics(BaseModel):
     hedge_count: int = 0
     wpm: float = 0
     hedge_density: float = 0.0
-    engine: Literal["none", "browser", "deepgram"] = "none"
+    engine: Literal["none", "browser", "deepgram", "native"] = "none"
 
 
 class ReadingNote(BaseModel):
@@ -456,6 +456,7 @@ class SettingsOut(BaseModel):
     active_engine: str
     keys_present: dict[str, bool]
     deepgram_available: bool
+    native_dictation_available: bool   # on-device macOS speech, LearnHarness.app only
     claude_cli_available: bool
     model_overrides: dict[str, str]
 

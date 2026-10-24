@@ -23,9 +23,26 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-API = f"http://127.0.0.1:{os.environ.get('LEARNHARNESS_API_PORT', '8000')}"
-DB = Path(os.environ.get("LEARNHARNESS_DB", ROOT / "harness.db"))
-SCRATCH = ROOT / "workspace" / "scratch.tex"
+HOME = Path(os.environ.get("LEARNHARNESS_HOME", Path.home() / "LearnHarness"))
+DB = Path(os.environ.get("LEARNHARNESS_DB", HOME / "harness.db"))
+SCRATCH = Path(os.environ.get("LEARNHARNESS_WORKSPACE", HOME / "workspace")) / "scratch.tex"
+
+
+def _api_base() -> str:
+    """./start.sh serves on LEARNHARNESS_API_PORT (8000); the Mac app writes its random port to ~/LearnHarness/.port."""
+    if "LEARNHARNESS_API_PORT" in os.environ:
+        return f"http://127.0.0.1:{os.environ['LEARNHARNESS_API_PORT']}"
+    port_file = HOME / ".port"
+    for port in ([port_file.read_text().strip()] if port_file.exists() else []) + ["8000"]:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=0.5):
+                return f"http://127.0.0.1:{port}"
+        except (urllib.error.URLError, TimeoutError, ConnectionError, ValueError):
+            continue
+    return "http://127.0.0.1:8000"
+
+
+API = _api_base()
 TTY = sys.stdout.isatty()
 
 
