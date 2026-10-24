@@ -1,0 +1,42 @@
+\documentclass{article}
+\usepackage{amsmath,amssymb,amsthm}
+\newtheorem{theorem}{Theorem}
+\newtheorem{definition}{Definition}
+\newtheorem{lemma}{Lemma}
+\begin{document}
+
+\section{Measure-theoretic preliminaries}
+
+\begin{definition}[Integrable envelope]
+A measurable $g \ge 0$ with $\int g \, d\mu < \infty$ dominates a sequence $(f_n)$ if $|f_n| \le g$ almost everywhere for all $n$.
+\end{definition}
+
+\begin{theorem}[Dominated convergence]
+If $f_n \to f$ almost everywhere and $(f_n)$ is dominated by an integrable envelope $g$, then $\int f_n \, d\mu \to \int f \, d\mu$.
+\end{theorem}
+
+\begin{lemma}[Escaping mass]
+$f_n = n \mathbf{1}_{(0,1/n)}$ converges to $0$ pointwise on $(0,1)$ while $\int_0^1 f_n = 1$ for every $n$; no integrable envelope exists since $\sup_n f_n(x) \approx 1/x$.
+\end{lemma}
+
+\section{Value iteration}
+
+\begin{definition}[Bellman optimality operator]
+$(\mathcal{T}^* V)(s) = \max_a \big[ R(s,a) + \gamma \sum_{s'} P(s' \mid s,a) V(s') \big]$ on the complete space $(\mathbb{R}^{|S|}, \|\cdot\|_\infty)$.
+\end{definition}
+
+\begin{theorem}[Contraction of the Bellman operator]
+For $\gamma \in [0,1)$, $\|\mathcal{T}^* U - \mathcal{T}^* V\|_\infty \le \gamma \|U - V\|_\infty$; hence value iteration converges geometrically to the unique fixed point $V^*$.
+\end{theorem}
+
+\section{Attention}
+
+\begin{definition}[Scaled dot-product attention]
+$\mathrm{Attn}(Q,K,V) = \mathrm{softmax}\!\big(QK^\top / \sqrt{d_k}\big) V$ with $Q, K \in \mathbb{R}^{T \times d_k}$.
+\end{definition}
+
+\begin{theorem}[Logit variance]
+If the entries of $q, k \in \mathbb{R}^{d_k}$ are independent with mean $0$ and variance $1$, then $\operatorname{Var}(q^\top k) = d_k$ and $\operatorname{Var}(q^\top k / \sqrt{d_k}) = 1$.
+\end{theorem}
+
+\end{document}

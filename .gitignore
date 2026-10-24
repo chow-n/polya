@@ -1,0 +1,10 @@
+backend/.venv/
+__pycache__/
+.pytest_cache/
+frontend/node_modules/
+frontend/dist/
+harness.db
+harness.db-wal
+harness.db-shm
+.logs/
+workspace/notes/session_*.md

@@ -1,0 +1,23 @@
+\documentclass{article}
+\usepackage{amsmath,amssymb}
+\newenvironment{problem}[1][]{\paragraph{Problem #1.}}{}
+\begin{document}
+\section{Bellman contraction problem set}
+
+\begin{problem}[Two-state chain]
+An agent alternates between two states with rewards $r = (1, 0)$ and deterministic transitions $s_1 \to s_2 \to s_1$.
+With $\gamma = 0.9$, you initialise $V_0 = (0, 0)$ and $U_0 = (10, -10)$ and run the same backup on both.
+Bound $\|V_k - U_k\|_\infty$ after $k$ backups without computing the iterates, and say what guarantees both runs reach the same limit.
+\end{problem}
+
+\begin{problem}[Discount at one]
+A colleague sets $\gamma = 1$ on an episodic task with a cycle of zero-reward states and claims value iteration still converges to a unique fixed point
+"because the backup is a max of averages". Which hypothesis of the fixed-point argument has failed, and exhibit two distinct fixed points.
+\end{problem}
+
+\begin{problem}[Noisy targets]
+Your tabular Q-learner's value estimates climb steadily above the true returns on a bandit where every arm has mean $0$ and noisy rewards.
+Explain the drift in terms of the backup target and propose a one-line change to the target that removes it.
+\end{problem}
+
+\end{document}
