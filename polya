@@ -10,6 +10,7 @@ Talks to the running API on :8000; when the server is down, `status`, `due` and 
   ./polya sessions          recent sessions
   ./polya eval              how well the learner model predicts your answers; difficulty target
   ./polya scratch [show|edit|watch|path]
+  ./polya chatgpt-login     open the ChatGPT browser engine's window to sign in (where that engine is installed)
 """
 from __future__ import annotations
 
@@ -217,8 +218,21 @@ def cmd_scratch(args: list[str]) -> None:
         print(SCRATCH.read_text() if SCRATCH.exists() else "(empty)")
 
 
+def cmd_chatgpt_login(_args: list[str]) -> None:
+    req = urllib.request.Request(API + "/api/engines/chatgpt-browser/login", method="POST", data=b"")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            print(json.loads(r.read()).get("message", ""))
+    except urllib.error.HTTPError as e:
+        print(json.loads(e.read() or b"{}").get("detail", f"HTTP {e.code}"))
+        sys.exit(1)
+    except (urllib.error.URLError, TimeoutError, ConnectionError):
+        print("Pólya is not running. Open the app (or ./start.sh) first.")
+        sys.exit(1)
+
+
 COMMANDS = {"status": cmd_status, "due": cmd_due, "graph": cmd_graph, "queue": cmd_queue, "sessions": cmd_sessions,
-            "eval": cmd_eval, "scratch": cmd_scratch}
+            "eval": cmd_eval, "scratch": cmd_scratch, "chatgpt-login": cmd_chatgpt_login}
 
 if __name__ == "__main__":
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:

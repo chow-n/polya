@@ -10,3 +10,6 @@ harness.db-shm
 workspace/notes/session_*.md
 build/
 macos/dist/
+
+# Private engines (docs/specs/chatgpt-engine B4): never published
+backend/local_engines/

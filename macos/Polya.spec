@@ -27,10 +27,26 @@ hiddenimports = (
     + ["webview.platforms.cocoa", "Speech", "AVFoundation", "Foundation", "AppKit", "Quartz", "pypdf"]
 )
 
+# Optional private engines (backend/local_engines, git-ignored; docs/specs/chatgpt-engine B4) ship only in builds
+# made where they exist, together with what they need.
+extra_datas, extra_binaries = [], []
+if (ROOT / "backend" / "local_engines").is_dir():
+    from PyInstaller.utils.hooks import collect_all
+    for pkg in ("playwright", "greenlet", "pyee"):
+        try:
+            d, b, h = collect_all(pkg)
+        except Exception:
+            continue
+        extra_datas += d
+        extra_binaries += b
+        hiddenimports += h
+hiddenimports = [m for m in hiddenimports if ".tests" not in m]
+
 a = Analysis(
     [str(ROOT / "macos" / "launcher.py")],
     pathex=[str(ROOT)],
-    datas=[(str(ROOT / "frontend" / "dist"), "frontend/dist")] + workspace_datas,
+    datas=[(str(ROOT / "frontend" / "dist"), "frontend/dist")] + workspace_datas + extra_datas,
+    binaries=extra_binaries,
     hiddenimports=hiddenimports,
     excludes=["tkinter", "matplotlib", "PyQt5", "PySide6", "IPython", "pytest", "py2app", "PyInstaller"],
     noarchive=False,

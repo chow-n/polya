@@ -39,6 +39,9 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         watcher.stop()
+        for eng in llm.LOCAL_ENGINES.values():   # e.g. close the ChatGPT browser window with the app
+            if hasattr(eng, "aclose"):
+                await eng.aclose()
 
 
 app = FastAPI(title="Pólya", version="0.4.0", lifespan=lifespan)
