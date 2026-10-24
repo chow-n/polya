@@ -1,4 +1,4 @@
-# LearnHarness API contract (backend :8000, Vite proxies `/api` and `/ws`)
+# Pólya API contract (backend :8000, Vite proxies `/api` and `/ws`)
 
 All request/response bodies are the Pydantic models in `backend/models.py` (mirror them exactly in
 `frontend/src/types/harness.ts`). JSON field names are snake_case on the wire.
@@ -51,8 +51,8 @@ Server → client `WsEvent {type, payload, ts}`:
 Client → server: `{type:"ping"}`, `{type:"scratch_write", content}`.
 
 ## WebSocket `/ws/dictation` (Deepgram relay / on-device macOS speech)
-Engine priority: `DEEPGRAM_API_KEY` set → Deepgram `nova-3` relay; else inside LearnHarness.app
-(`LEARNHARNESS_APP=1`) → on-device `SFSpeechRecognizer` (asks for speech + microphone permission once);
+Engine priority: `DEEPGRAM_API_KEY` set → Deepgram `nova-3` relay; else inside Pólya.app
+(`POLYA_APP=1`) → on-device `SFSpeechRecognizer` (asks for speech + microphone permission once);
 else `{type:"unavailable", reason}` and close, and the client uses browser SpeechRecognition.
 - First frame on success: `{type:"ready", engine:"deepgram"|"native"}`.
 - Then `{type:"transcript", text, is_final, words:[{word,start,end}]}`; interim frames replace the current

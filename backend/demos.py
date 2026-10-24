@@ -1,4 +1,4 @@
-"""Interactive sandbox demos and SVG diagrams for LearnHarness.
+"""Interactive sandbox demos and SVG diagrams for Pólya.
 
 Used by the ``SANDBOX_DEMO_BUILDER`` and ``SVG_DIAGRAM_MAKER`` sub-agents
 (ARCHITECTURE_SPEC.md §5.4, §5.5) and by the seed dataset (§7.5).  Every HTML

@@ -1,5 +1,5 @@
-# PyInstaller spec for the self-contained LearnHarness.app (Stage B, `make bundle`).
-# Run from the repo root: pyinstaller macos/LearnHarness.spec --distpath build/bundle --workpath build/pyinstaller
+# PyInstaller spec for the self-contained Pólya.app (Stage B, `make bundle`).
+# Run from the repo root: pyinstaller macos/Polya.spec --distpath build/bundle --workpath build/pyinstaller
 import sys
 from pathlib import Path
 
@@ -36,13 +36,13 @@ a = Analysis(
     noarchive=False,
 )
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="LearnHarness", console=False,
+exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="Polya", console=False,
           argv_emulation=False, target_arch="arm64", codesign_identity=None)
-coll = COLLECT(exe, a.binaries, a.datas, name="LearnHarness")
+coll = COLLECT(exe, a.binaries, a.datas, name="Polya")
 app = BUNDLE(
     coll,
-    name="LearnHarness.app",
-    icon=str(ROOT / "macos" / "LearnHarness.icns"),
+    name="Pólya.app",
+    icon=str(ROOT / "macos" / "Polya.icns"),
     bundle_identifier=PLIST["CFBundleIdentifier"],
     version=PLIST["CFBundleShortVersionString"],
     info_plist=PLIST,

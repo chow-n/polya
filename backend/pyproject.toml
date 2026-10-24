@@ -1,7 +1,7 @@
 [project]
-name = "learnharness-backend"
+name = "polya-backend"
 version = "1.0.0"
-description = "LearnHarness: local-first POMDP cognitive learning harness (FastAPI + SQLite)"
+description = "Pólya: local-first POMDP learning companion (FastAPI + SQLite backend)"
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115", "uvicorn[standard]>=0.30", "pydantic>=2.7", "httpx>=0.27", "sympy>=1.13",

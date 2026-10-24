@@ -48,7 +48,7 @@ def claude_cli_available() -> bool:
 
 def resolve_engine() -> str:
     p = settings.provider
-    if force_deterministic.get() or os.environ.get("LEARNHARNESS_LLM") == "deterministic":
+    if force_deterministic.get() or config.env("LLM") == "deterministic":
         return "deterministic"
     if p == "deterministic":
         return "deterministic"

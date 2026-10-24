@@ -6,7 +6,7 @@ Pydantic models in backend/models.py and fall back to deterministic content when
 from __future__ import annotations
 
 CORE_LAWS = r"""
-# LearnHarness core pedagogical laws (non-negotiable)
+# Pólya core pedagogical laws (non-negotiable)
 
 Law 1 — Anti-Illusion of Competence.
 The greatest danger in AI-assisted learning is NOT hallucination; it is letting the learner skip the cognitive

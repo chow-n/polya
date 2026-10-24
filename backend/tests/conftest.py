@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-os.environ["LEARNHARNESS_LLM"] = "deterministic"
-os.environ["LEARNHARNESS_OFFLINE"] = "1"
+os.environ["POLYA_LLM"] = "deterministic"
+os.environ["POLYA_OFFLINE"] = "1"
 
 from backend import config  # noqa: E402
 

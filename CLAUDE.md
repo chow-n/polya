@@ -1,6 +1,12 @@
-# CLAUDE.md — LearnHarness
+# CLAUDE.md — Pólya (formerly LearnHarness)
 
 **After any context compaction, re-read this file, `ARCHITECTURE_SPEC.md` and `docs/specs/learnharness/SPEC.md` (decisions + assumptions).**
+
+## Rename + UI (approved 2026-10-23, docs/specs/ui-simplify/SPEC.md)
+- Product name **Pólya** (identifiers `polya`); env vars `POLYA_*` with `LEARNHARNESS_*` accepted; data home `~/Polya`
+  (auto-moved from `~/LearnHarness`, symlink left); CLI `./polya`; app `Pólya.app` (`make app` / `make bundle`).
+- The verbatim spec below still says "LearnHarness"; it is historical. The UI is the minimalist focus layout
+  (Learn · Review · Map), with advanced telemetry behind Details / Settings → Advanced.
 
 ## Build decisions (approved fast-track 2026-10-23)
 - Zero-key LLM default: `claude -p --output-format json` (90s timeout) → deterministic SymPy/graph engine.

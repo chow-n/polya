@@ -456,7 +456,7 @@ class SettingsOut(BaseModel):
     active_engine: str
     keys_present: dict[str, bool]
     deepgram_available: bool
-    native_dictation_available: bool   # on-device macOS speech, LearnHarness.app only
+    native_dictation_available: bool   # on-device macOS speech, Pólya.app only
     claude_cli_available: bool
     model_overrides: dict[str, str]
 

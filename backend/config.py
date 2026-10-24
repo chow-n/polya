@@ -1,4 +1,7 @@
-"""Paths, environment variables and mutable runtime settings."""
+"""Paths, environment variables and mutable runtime settings.
+
+Environment variables use the `POLYA_` prefix; the pre-rename `LEARNHARNESS_` prefix is still accepted.
+"""
 from __future__ import annotations
 
 import os
@@ -6,35 +9,43 @@ import shutil
 import threading
 from pathlib import Path
 
-ROOT = Path(os.environ.get("LEARNHARNESS_ROOT", Path(__file__).resolve().parent.parent))
+
+def env(name: str, default=None):
+    """POLYA_<name>, falling back to the legacy LEARNHARNESS_<name>."""
+    return os.environ.get(f"POLYA_{name}", os.environ.get(f"LEARNHARNESS_{name}", default))
+
+
+ROOT = Path(env("ROOT", Path(__file__).resolve().parent.parent))
 BACKEND_DIR = ROOT / "backend"
 # Starter files shipped with the code (repo or app bundle); copied into the data home on first run.
 SEED_WORKSPACE = ROOT / "workspace"
 LEGACY_DB = ROOT / "harness.db"
-FRONTEND_DIST = Path(os.environ.get("LEARNHARNESS_FRONTEND_DIST", ROOT / "frontend" / "dist"))
-APP_MODE = os.environ.get("LEARNHARNESS_APP") == "1"
+FRONTEND_DIST = Path(env("FRONTEND_DIST", ROOT / "frontend" / "dist"))
+APP_MODE = env("APP") == "1"
 
-# Shared data home for the Mac app, ./start.sh and ./harness-cli (docs/specs/mac-app/SPEC.md D2).
-HOME = Path(os.environ.get("LEARNHARNESS_HOME", Path.home() / "LearnHarness"))
-WORKSPACE = Path(os.environ.get("LEARNHARNESS_WORKSPACE", HOME / "workspace"))
+# Shared data home for the Mac app, ./start.sh and ./polya (docs/specs/mac-app/SPEC.md D2, ui-simplify D5).
+LEGACY_HOME = Path.home() / "LearnHarness"
+HOME_OVERRIDDEN = env("HOME") is not None
+HOME = Path(env("HOME", Path.home() / "Polya"))
+WORKSPACE = Path(env("WORKSPACE", HOME / "workspace"))
 NOTES_DIR = WORKSPACE / "notes"
 PROBLEMS_DIR = WORKSPACE / "problems"
 SCRATCH_PATH = WORKSPACE / "scratch.tex"
-DB_PATH = Path(os.environ.get("LEARNHARNESS_DB", HOME / "harness.db"))
+DB_PATH = Path(env("DB", HOME / "harness.db"))
 PORT_FILE = HOME / ".port"
 
-API_PORT = int(os.environ.get("LEARNHARNESS_API_PORT", "8000"))
-CLAUDE_CLI_TIMEOUT_S = float(os.environ.get("LEARNHARNESS_CLAUDE_TIMEOUT", "90"))
+API_PORT = int(env("API_PORT", "8000"))
+CLAUDE_CLI_TIMEOUT_S = float(env("CLAUDE_TIMEOUT", "90"))
 SYMPY_TIMEOUT_S = 5
 ARXIV_TIMEOUT_S = 6.0
 
 PROVIDERS = ("auto", "anthropic", "gemini", "openai", "openrouter", "claude_cli", "deterministic")
 
 DEFAULT_MODELS = {
-    "anthropic": os.environ.get("LEARNHARNESS_ANTHROPIC_MODEL", "claude-sonnet-5-5"),
-    "gemini": os.environ.get("LEARNHARNESS_GEMINI_MODEL", "gemini-2.5-flash"),
-    "openai": os.environ.get("LEARNHARNESS_OPENAI_MODEL", "gpt-4.1-mini"),
-    "openrouter": os.environ.get("LEARNHARNESS_OPENROUTER_MODEL", "anthropic/claude-sonnet-4.5"),
+    "anthropic": env("ANTHROPIC_MODEL", "claude-sonnet-5-5"),
+    "gemini": env("GEMINI_MODEL", "gemini-2.5-flash"),
+    "openai": env("OPENAI_MODEL", "gpt-4.1-mini"),
+    "openrouter": env("OPENROUTER_MODEL", "anthropic/claude-sonnet-4.5"),
 }
 
 
@@ -61,12 +72,22 @@ def ensure_home(db_path: Path, workspace: Path, seed_db: Path, seed_workspace: P
     return copied
 
 
+def migrate_legacy_home(home: Path, legacy: Path) -> str | None:
+    """Pre-rename data lived in ~/LearnHarness. Move it to ~/Polya once and leave a symlink at the old path.
+    If both exist, ~/Polya wins and the old folder is left untouched."""
+    if home.exists() or home.is_symlink() or not legacy.is_dir() or legacy.is_symlink():
+        return None
+    legacy.rename(home)
+    legacy.symlink_to(home, target_is_directory=True)
+    return f"moved {legacy} -> {home} (symlink left at old path)"
+
+
 class RuntimeSettings:
     """Process-wide settings, editable from the UI (PUT /api/settings). Keys never leave the process."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self.provider: str = os.environ.get("LEARNHARNESS_LLM", "auto")
+        self.provider: str = env("LLM", "auto")
         if self.provider not in PROVIDERS:
             self.provider = "auto"
         self.keys: dict[str, str] = {

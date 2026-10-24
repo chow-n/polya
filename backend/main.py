@@ -26,8 +26,12 @@ from .scratchpad_watcher import watcher
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     hub.loop = asyncio.get_running_loop()
+    if not config.HOME_OVERRIDDEN:
+        moved = config.migrate_legacy_home(config.HOME, config.LEGACY_HOME)
+        if moved:
+            print(f"[polya] {moved}", flush=True)
     for line in config.ensure_home(config.DB_PATH, config.WORKSPACE, config.LEGACY_DB, config.SEED_WORKSPACE):
-        print(f"[learnharness] migrated {line}", flush=True)
+        print(f"[polya] migrated {line}", flush=True)
     db.init_db()
     await seed.seed_if_empty()
     watcher.start()
@@ -37,7 +41,7 @@ async def lifespan(app: FastAPI):
         watcher.stop()
 
 
-app = FastAPI(title="LearnHarness", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Pólya", version="0.3.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
                    allow_methods=["*"], allow_headers=["*"])
 

@@ -2,7 +2,7 @@
 
 Exposed through the existing `/ws/dictation` protocol (docs/API.md), so the frontend treats it like the Deepgram
 relay. Only enabled in app mode: TCC terminates a process that requests speech/microphone access without the
-usage descriptions in its own bundle's Info.plist, which only LearnHarness.app provides.
+usage descriptions in its own bundle's Info.plist, which only Pólya.app provides.
 """
 from __future__ import annotations
 
@@ -39,14 +39,14 @@ def available() -> bool:
 
 def unavailable_reason() -> str:
     if not config.APP_MODE:
-        return "native dictation runs only inside LearnHarness.app"
+        return "native dictation runs only inside the Pólya app"
     if Speech is None:
         return f"PyObjC Speech framework unavailable: {_IMPORT_ERROR}"
     return "speech recognizer unavailable on this Mac"
 
 
 async def ensure_authorized(timeout: float = 120.0) -> tuple[bool, str]:
-    """Ask once for speech-recognition and microphone permission (system prompts name LearnHarness)."""
+    """Ask once for speech-recognition and microphone permission (system prompts name Pólya)."""
     loop = asyncio.get_running_loop()
 
     status = Speech.SFSpeechRecognizer.authorizationStatus()

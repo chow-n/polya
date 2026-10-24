@@ -13,7 +13,7 @@ frontend-deps:
 	cd frontend && npm install --no-audit --no-fund
 
 test: backend-deps
-	LEARNHARNESS_LLM=deterministic LEARNHARNESS_OFFLINE=1 $(PY) -m pytest backend/tests -q
+	POLYA_LLM=deterministic POLYA_OFFLINE=1 $(PY) -m pytest backend/tests -q
 
 build: frontend-deps
 	cd frontend && npm run build
@@ -28,33 +28,35 @@ start:
 	./start.sh
 
 cli-status:
-	./harness-cli status
+	./polya status
 
-# ---- Mac app (docs/specs/mac-app/SPEC.md) ----
+# ---- Mac app (docs/specs/mac-app/SPEC.md, renamed per docs/specs/ui-simplify/SPEC.md) ----
 APP_DIR := $(HOME)/Applications
+APP_NAME := Pólya.app
 
 icon: backend-deps
 	$(PY) macos/make_icon.py
 
-# Stage A: repo-backed LearnHarness.app (py2app alias mode) installed to ~/Applications
+# Stage A: repo-backed Pólya.app (py2app alias mode) installed to ~/Applications
 app: backend-deps build
-	@test -f macos/LearnHarness.icns || $(PY) macos/make_icon.py
+	@test -f macos/Polya.icns || $(PY) macos/make_icon.py
 	rm -rf build/app build/py2app
 	$(PY) macos/setup_app.py py2app -A --dist-dir build/app --bdist-base build/py2app > build-app.log 2>&1 || (tail -30 build-app.log; exit 1)
-	codesign --force --deep -s - build/app/LearnHarness.app
-	mkdir -p "$(APP_DIR)" && rm -rf "$(APP_DIR)/LearnHarness.app" && cp -R build/app/LearnHarness.app "$(APP_DIR)/"
+	codesign --force --deep -s - "build/app/$(APP_NAME)"
+	mkdir -p "$(APP_DIR)" && rm -rf "$(APP_DIR)/$(APP_NAME)" "$(APP_DIR)/LearnHarness.app" && cp -R "build/app/$(APP_NAME)" "$(APP_DIR)/"
 	@rm -f build-app.log
-	@echo "Installed $(APP_DIR)/LearnHarness.app — open it from Launchpad/Spotlight or: open -a LearnHarness"
+	@echo "Installed $(APP_DIR)/$(APP_NAME) — open it from Spotlight or: open -a Pólya"
 
-# Stage B: self-contained LearnHarness.app (PyInstaller, embedded Python) installed to /Applications.
-# Replaces the stage A copy in ~/Applications so only one app owns the bundle id (rebuild it with `make app`).
+# Stage B: self-contained Pólya.app (PyInstaller, embedded Python) installed to /Applications.
+# Replaces the stage A copy in ~/Applications so only one app owns the bundle id (rebuild it with `make app`),
+# and removes the pre-rename LearnHarness.app.
 bundle: backend-deps build
-	@test -f macos/LearnHarness.icns || $(PY) macos/make_icon.py
+	@test -f macos/Polya.icns || $(PY) macos/make_icon.py
 	rm -rf build/bundle build/pyinstaller
-	$(PY) -m PyInstaller macos/LearnHarness.spec --noconfirm --distpath build/bundle --workpath build/pyinstaller > build-bundle.log 2>&1 || (tail -40 build-bundle.log; exit 1)
-	codesign --force --deep -s - build/bundle/LearnHarness.app
-	rm -rf /Applications/LearnHarness.app && cp -R build/bundle/LearnHarness.app /Applications/
-	@if [ -d "$(APP_DIR)/LearnHarness.app" ]; then rm -rf "$(APP_DIR)/LearnHarness.app"; echo "Removed stage A copy from $(APP_DIR)"; fi
+	$(PY) -m PyInstaller macos/Polya.spec --noconfirm --distpath build/bundle --workpath build/pyinstaller > build-bundle.log 2>&1 || (tail -40 build-bundle.log; exit 1)
+	codesign --force --deep -s - "build/bundle/$(APP_NAME)"
+	rm -rf "/Applications/$(APP_NAME)" /Applications/LearnHarness.app && cp -R "build/bundle/$(APP_NAME)" /Applications/
+	@for old in "$(APP_DIR)/$(APP_NAME)" "$(APP_DIR)/LearnHarness.app"; do if [ -d "$$old" ]; then rm -rf "$$old"; echo "Removed $$old"; fi; done
 	@rm -f build-bundle.log
-	@du -sh /Applications/LearnHarness.app
-	@echo "Installed /Applications/LearnHarness.app (self-contained) — open -a LearnHarness"
+	@du -sh "/Applications/$(APP_NAME)"
+	@echo "Installed /Applications/$(APP_NAME) (self-contained) — open -a Pólya"

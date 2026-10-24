@@ -60,7 +60,7 @@ class ScratchpadWatcher:
         for d in (config.WORKSPACE, config.NOTES_DIR, config.PROBLEMS_DIR):
             d.mkdir(parents=True, exist_ok=True)
         if not config.SCRATCH_PATH.exists():
-            config.SCRATCH_PATH.write_text("% LearnHarness scratchpad — saved edits stream live into the UI.\n")
+            config.SCRATCH_PATH.write_text("% Pólya scratchpad — saved edits stream live into the UI.\n")
         self.observer = Observer()
         self.observer.schedule(self.handler, str(config.WORKSPACE), recursive=True)
         self.observer.daemon = True

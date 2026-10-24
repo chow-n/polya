@@ -29,7 +29,7 @@ def _from_user_code():
     return _s._getframe(2).f_code.co_filename == "<string>"
 def _guarded(name, *a, **k):
     if name.split(".")[0] in _blocked and _from_user_code():
-        raise ImportError("module '%s' is blocked inside the LearnHarness verifier sandbox" % name)
+        raise ImportError("module '%s' is blocked inside the Pólya verifier sandbox" % name)
     return _real_import(name, *a, **k)
 def _guarded_open(*a, **k):
     if _from_user_code():
@@ -274,7 +274,7 @@ def offline_literature(query: str, k: int = 4) -> list[dict[str, Any]]:
 
 def search_arxiv(query: str, max_results: int = 4, timeout: float = config.ARXIV_TIMEOUT_S) -> tuple[list[dict[str, Any]], str]:
     """Query the arXiv Atom API. Returns (entries, source) where source is 'arxiv' or 'offline'."""
-    if os.environ.get("LEARNHARNESS_OFFLINE") == "1":
+    if config.env("OFFLINE") == "1":
         return offline_literature(query, max_results), "offline"
     words = [w for w in re.findall(r"[A-Za-z0-9]+", query) if len(w) > 2][:6]
     q = "+AND+".join(f"all:{urllib.parse.quote(w)}" for w in words) or "all:attention"

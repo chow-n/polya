@@ -1,4 +1,4 @@
-"""LearnHarness.app entry point: one process = uvicorn (API + built frontend) + a native WKWebView window.
+"""Pólya.app entry point: one process = uvicorn (API + built frontend) + a native WKWebView window.
 
 Used by both builds (docs/specs/mac-app/SPEC.md):
 - Stage A (`make app`): py2app alias bundle that runs this file from the repo with the repo venv.
@@ -71,25 +71,30 @@ def main() -> None:
 
     frozen = getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
     root = Path(sys._MEIPASS) if frozen else Path(__file__).resolve().parent.parent
-    os.environ["LEARNHARNESS_APP"] = "1"
-    os.environ.setdefault("LEARNHARNESS_ROOT", str(root))
+    os.environ["POLYA_APP"] = "1"
+    os.environ.setdefault("POLYA_ROOT", str(root))
     os.environ["PATH"] = login_shell_path()
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
 
-    home = Path(os.environ.get("LEARNHARNESS_HOME", Path.home() / "LearnHarness"))
+    from backend import config   # light import: paths only (env above must be set first)
+
+    moved = None if config.HOME_OVERRIDDEN else config.migrate_legacy_home(config.HOME, config.LEGACY_HOME)
+    home = config.HOME
     (home / "logs").mkdir(parents=True, exist_ok=True)
     log_path = home / "logs" / "app.log"
     if not sys.stdout.isatty():
         log = open(log_path, "a", buffering=1)
         sys.stdout = sys.stderr = log
-    try:  # privacy prompts use the main bundle's Info.plist; it must be LearnHarness.app, not Python's
+    try:  # privacy prompts use the main bundle's Info.plist; it must be Pólya.app, not Python's
         from Foundation import NSBundle
         bundle_id = NSBundle.mainBundle().bundleIdentifier()
     except Exception:
         bundle_id = None
-    print(f"\n=== LearnHarness launch {time.strftime('%Y-%m-%d %H:%M:%S')} root={root} frozen={frozen} "
+    print(f"\n=== Pólya launch {time.strftime('%Y-%m-%d %H:%M:%S')} root={root} frozen={frozen} "
           f"bundle={bundle_id}", flush=True)
+    if moved:
+        print(f"[polya] {moved}", flush=True)
 
     lock = home / ".lock"
     if lock.exists():
@@ -98,7 +103,7 @@ def main() -> None:
         except ValueError:
             other = 0
         if other and other != os.getpid() and pid_alive(other):
-            print(f"another LearnHarness (pid {other}) is running; exiting", flush=True)
+            print(f"another Pólya (pid {other}) is running; exiting", flush=True)
             return
     lock.write_text(str(os.getpid()))
 
@@ -106,7 +111,6 @@ def main() -> None:
     import webview
     from webview.menu import Menu, MenuAction, MenuSeparator
 
-    from backend import config
     from backend.main import app
 
     port = free_port()
@@ -123,7 +127,7 @@ def main() -> None:
         import html
         start_url = None
         error_html = ("<body style='background:#070a12;color:#f8fafc;font:14px system-ui;padding:24px'>"
-                      "<h2>LearnHarness could not start its server</h2>"
+                      "<h2>Pólya could not start its server</h2>"
                       f"<p>Log: {html.escape(str(log_path))}</p><pre style='color:#fda4af;white-space:pre-wrap'>"
                       + html.escape("\n".join(tail)) + "</pre></body>")
 
@@ -138,7 +142,7 @@ def main() -> None:
         subprocess.Popen(["osascript", "-e", script, "-e", 'tell application "Terminal" to activate'])
 
     window = webview.create_window(
-        "LearnHarness", url=start_url, html=None if start_url else error_html, width=1520, height=960,
+        "Pólya", url=start_url, html=None if start_url else error_html, width=1520, height=960,
         min_size=(1100, 700), background_color="#070a12", text_select=True)
 
     menu = [
@@ -171,7 +175,7 @@ def main() -> None:
                 f.unlink()
             except OSError:
                 pass
-        print("=== LearnHarness quit", flush=True)
+        print("=== Pólya quit", flush=True)
 
     window.events.closing += shutdown   # Cmd+Q: applicationShouldTerminate_ fires `closing`
     window.events.closed += shutdown

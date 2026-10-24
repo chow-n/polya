@@ -1,4 +1,4 @@
-"""Render macos/LearnHarness.icns: a dark tile with a small premise → conclusion hypergraph (two premises joined
+"""Render macos/Polya.icns: a dark tile with a small premise → conclusion hypergraph (two premises joined
 by an ∧ hub, rising to a conclusion) in the app's emerald / indigo / amber palette. Uses AppKit via PyObjC."""
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from AppKit import (NSBezierPath, NSBitmapImageRep, NSColor, NSCompositingOperat
                     NSGraphicsContext, NSPNGFileType)
 from Foundation import NSMakeRect, NSPoint
 
-OUT = Path(__file__).resolve().parent / "LearnHarness.icns"
+OUT = Path(__file__).resolve().parent / "Polya.icns"
 
 
 def rgb(h: str, a: float = 1.0) -> NSColor:
@@ -93,7 +93,7 @@ def render(size: int, path: Path) -> None:
 
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        iconset = Path(tmp) / "LearnHarness.iconset"
+        iconset = Path(tmp) / "Polya.iconset"
         iconset.mkdir()
         for base in (16, 32, 128, 256, 512):
             render(base, iconset / f"icon_{base}x{base}.png")

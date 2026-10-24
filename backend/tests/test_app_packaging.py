@@ -79,4 +79,25 @@ def test_native_dictation_only_in_app_mode():
     from backend import native_speech
     assert config.APP_MODE is False
     assert native_speech.available() is False
-    assert "LearnHarness.app" in native_speech.unavailable_reason()
+    assert "Pólya app" in native_speech.unavailable_reason()
+
+
+def test_legacy_home_moves_to_polya_with_symlink(tmp_path):
+    legacy, home = tmp_path / "LearnHarness", tmp_path / "Polya"
+    (legacy / "workspace").mkdir(parents=True)
+    (legacy / "harness.db").write_text("db")
+    assert "moved" in config.migrate_legacy_home(home, legacy)
+    assert (home / "harness.db").read_text() == "db"
+    assert legacy.is_symlink() and (legacy / "harness.db").read_text() == "db"   # old path still works
+    assert config.migrate_legacy_home(home, legacy) is None                      # idempotent
+    # both present: ~/Polya wins, the old folder is left untouched
+    other_legacy = tmp_path / "Other"
+    other_legacy.mkdir()
+    assert config.migrate_legacy_home(home, other_legacy) is None and not other_legacy.is_symlink()
+
+
+def test_env_prefix_fallback(monkeypatch):
+    monkeypatch.setenv("LEARNHARNESS_FOO", "legacy")
+    assert config.env("FOO") == "legacy"
+    monkeypatch.setenv("POLYA_FOO", "new")
+    assert config.env("FOO") == "new"

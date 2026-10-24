@@ -1,4 +1,4 @@
-"""Deterministic (no-LLM) teaching content for the 20 LearnHarness seed nodes.
+"""Deterministic (no-LLM) teaching content for the 20 Pólya seed nodes.
 
 Used whenever no LLM is available. Every node carries:
   probe / predict / reading / check / productive_failure / practice (cue levels 1-4) /
