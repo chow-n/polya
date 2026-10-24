@@ -10,13 +10,13 @@ from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnec
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import cognitive_math as cm
-from . import config, db, llm, native_speech, seed, tools
+from . import config, db, llm, model_eval, native_speech, seed, tools
 from .agents import orchestrator, subagents
 from .config import settings
 from .hub import hub
 from .models import (
     ALL_AGENTS, ArtifactOut, ChunkEvaluation, ChunkRequest, CreateSessionRequest, DemoTelemetry, DuelReply, DuelRequest,
-    DueItem, GraphOut, HintOut, HintRequest, NodeDetail, PracticeQueueItem, ScratchOut, ScratchWrite, SessionOut,
+    DueItem, GraphOut, HintOut, HintRequest, ModelEvalOut, NodeDetail, PracticeQueueItem, ScratchOut, ScratchWrite, SessionOut,
     SessionState, SettingsOut, SettingsUpdate, StatsOut, StepResult, StepSubmission, SubagentRunRequest, WorkspaceFile,
     WorkspaceFileContent,
 )
@@ -41,7 +41,7 @@ async def lifespan(app: FastAPI):
         watcher.stop()
 
 
-app = FastAPI(title="Pólya", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="Pólya", version="0.4.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
                    allow_methods=["*"], allow_headers=["*"])
 
@@ -79,7 +79,7 @@ def _settings_out() -> dict[str, Any]:
     return {"provider": settings.provider, "active_engine": llm.describe_engine(), "keys_present": llm.keys_present(),
             "deepgram_available": bool(settings.keys.get("deepgram")),
             "native_dictation_available": native_speech.available(), "claude_cli_available": llm.claude_cli_available(),
-            "model_overrides": dict(settings.models)}
+            "model_overrides": dict(settings.models), "target_success": config.load_prefs()["target_success"]}
 
 
 # ------------------------------------------------------------------ REST
@@ -311,12 +311,23 @@ async def get_settings() -> dict[str, Any]:
 
 @app.put("/api/settings", response_model=SettingsOut)
 async def put_settings(req: SettingsUpdate) -> dict[str, Any]:
+    if req.target_success is not None:
+        target = next((t for t in config.TARGET_CHOICES if abs(t - req.target_success) < 1e-9), None)
+        if target is None:
+            raise HTTPException(422, f"target_success must be one of {list(config.TARGET_CHOICES)}")
+        config.save_prefs(target_success=target)
     settings.update(req.provider, {"anthropic": req.anthropic_api_key, "gemini": req.gemini_api_key,
                                    "openai": req.openai_api_key, "openrouter": req.openrouter_api_key,
                                    "deepgram": req.deepgram_api_key}, req.model_overrides)
     out = _settings_out()
     await hub.broadcast("stats", compute_stats())
     return out
+
+
+@app.get("/api/model-eval", response_model=ModelEvalOut)
+async def get_model_eval() -> dict[str, Any]:
+    with db.ro() as conn:
+        return model_eval.scoreboard(conn, config.load_prefs()["target_success"])
 
 
 # ------------------------------------------------------------------ WebSockets

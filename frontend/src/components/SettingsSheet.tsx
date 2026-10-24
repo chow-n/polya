@@ -1,13 +1,14 @@
 /**
- * Settings (⚙): appearance (System / Light / Dark), AI engine + API keys (PUT /api/settings), workspace (open and edit
- * scratch.tex via /api/scratch) and Advanced (the Advanced telemetry toggle that restores the legacy panels, plus
- * per-provider model overrides).
+ * Settings (⚙): appearance (System / Light / Dark), difficulty target, AI engine + API keys (PUT /api/settings),
+ * workspace (open and edit scratch.tex via /api/scratch) and Advanced (the Advanced telemetry toggle that restores the
+ * legacy panels, per-provider model overrides and the model scoreboard).
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePrefs, type ThemePref } from '../store/prefs';
 import { useHarnessStore } from '../store/useHarnessStore';
-import { LLM_PROVIDERS, type LLMProvider, type SettingsUpdate } from '../types/harness';
+import { LLM_PROVIDERS, TARGET_CHOICES, type LLMProvider, type SettingsUpdate } from '../types/harness';
 import { Details, MOD_KEY, Spinner, useEscape } from './kit';
+import ModelScoreboard from './ModelScoreboard';
 
 const PROVIDER_LABEL: Record<LLMProvider, string> = {
   auto: 'Automatic (best available)',
@@ -153,6 +154,28 @@ export default function SettingsSheet({ onClose }: { onClose: () => void }): JSX
           </div>
         </section>
 
+        <section className="sheet-sec" aria-labelledby="s-target">
+          <h3 id="s-target">Difficulty target</h3>
+          <div className="seg" role="radiogroup" aria-labelledby="s-target">
+            {TARGET_CHOICES.map((t) => {
+              const on = Math.abs((settings?.target_success ?? 0.85) - t) < 1e-9;
+              return (
+                <button
+                  key={t}
+                  role="radio"
+                  aria-checked={on}
+                  className={`seg-opt${on ? ' on' : ''}`}
+                  disabled={busy}
+                  onClick={() => void updateSettings({ target_success: t })}
+                >
+                  {Math.round(t * 100)}%
+                </button>
+              );
+            })}
+          </div>
+          <p className="muted small">How often you should get things right. Pólya makes steps bigger or smaller to keep you near it.</p>
+        </section>
+
         <section className="sheet-sec" aria-labelledby="s-engine">
           <h3 id="s-engine">AI engine</h3>
           <p className="muted small">
@@ -252,6 +275,7 @@ export default function SettingsSheet({ onClose }: { onClose: () => void }): JSX
               />
             </label>
           ) : null}
+          {advanced ? <ModelScoreboard /> : null}
         </section>
 
         <section className="sheet-sec" aria-labelledby="s-keys">

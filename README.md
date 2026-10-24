@@ -43,6 +43,7 @@ Your data lives in `~/Polya/`: `harness.db` plus `workspace/` holding notes, pro
 ./polya due        # what to review next
 ./polya graph      # your ideas by depth
 ./polya scratch    # print / edit / watch workspace/scratch.tex (saves stream into the app live)
+./polya eval       # how well Pólya's model predicts your answers, and your difficulty target
 ```
 
 ### AI engine (optional)
@@ -53,6 +54,12 @@ Pólya works with no API key at all:
 3. Otherwise a built-in engine uses hand-written content for the 20 starter topics, plus SymPy for checking math.
 
 Voice: inside the Mac app, dictation runs on-device with Apple's speech recognizer. In a browser, it uses the browser's speech recognition, or Deepgram if `DEEPGRAM_API_KEY` is set.
+
+## How it adapts
+
+Pólya aims for you to get about 85% of questions right: hard enough to stretch you, easy enough to keep going. It tracks your recent success rate, weighting the last ten graded answers with the newest counting most. When you're well above the target, steps get bigger and review problems get harder (plain → disguised notation → mixed → trick questions). When you're well below it, steps and problems get easier. A clear miss still drops back to small steps and adds a review of what that idea builds on. You can set the target to 80%, 85% or 90% in **Settings**; the reasoning behind each change shows under **Details** on the card.
+
+Pólya also checks its own model. Before each graded answer it records how likely it thought you were to get it right. **Settings → Advanced** (or `./polya eval`) scores those predictions, using log-loss, Brier score, AUC and calibration, against two simple baselines: your overall accuracy and your accuracy on that idea. Until about 50 answers the numbers are too noisy to mean much. `python -m backend.simulate` runs both the model scoreboard and the target-tracking on synthetic learners.
 
 ## Why it works, and the limits
 
@@ -68,10 +75,12 @@ Each mechanism is based on a well-replicated finding:
 | Can let you struggle before teaching | Productive failure: Kapur (2008) |
 | Tells you whether your confidence is accurate | Calibration, Brier score decomposition: Murphy (1973) |
 | Judges *how* you reasoned, not just the answer | Bayesian knowledge tracing (Corbett & Anderson, 1994), extended with reasoning quality |
+| Keeps you succeeding about 85% of the time | Wilson et al. (2019), derived for machine learners; a tunable heuristic for people |
 
 **Honest caveats.** This is a research prototype, not a validated tutor.
 
-- The memory and mastery constants are hand-set rather than fitted to your history.
+- The memory and mastery constants are hand-set rather than fitted to your history. The scoreboard shows how much that costs.
+- The 85% target comes from machine-learning theory, and its evidence for humans is indirect.
 - The "most informative question" score is an approximation.
 - Without an AI engine, reasoning quality is judged by concept coverage, which can be gamed.
 - No learner study has been run.
@@ -99,6 +108,7 @@ macos/     native app launcher (pywebview), py2app (`make app`) and PyInstaller 
 - v0.1: web app.
 - v0.2: native macOS app.
 - v0.3: renamed Pólya, with a minimalist interface.
+- v0.4: model scoreboard and the 85% difficulty target.
 - Next: fitting the memory model to your own review history.
 
 ## License

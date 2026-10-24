@@ -178,6 +178,7 @@ export function StepDetails({ step, held, extra }: { step: StepPayload; held?: H
         <DetailRow k="Step">
           {step.step_index + 1} · {step.kind} · cue level {step.cue_level} · Δ {step.delta.toFixed(1)} · written by {step.generated_by}
         </DetailRow>
+        {held?.result.controller ? <DetailRow k="Pacing">{held.result.controller.summary}</DetailRow> : null}
         <ProsodyRows m={held ? held.result.trace.prosody_metrics : metrics} />
       </div>
       <RelatedArtifacts sessionId={sessionId} />

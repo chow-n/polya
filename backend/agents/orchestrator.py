@@ -16,7 +16,7 @@ from typing import Any, Optional
 from fastapi import HTTPException
 
 from .. import cognitive_math as cm
-from .. import db, demos, llm, tools
+from .. import config, db, demos, llm, tools
 from ..hub import hub
 from ..models import LLMStepContent
 from . import prompts, subagents
@@ -25,7 +25,6 @@ from .content_bank import CONTENT
 MAX_PROBES = 4
 MAX_PLAN = 7
 TEACH_MODES = ("PROBE", "PRODUCTIVE_FAILURE", "TEACH")
-ASSESSED_PHASES = ("CHECK", "PRACTICE_CHUNK", "REFEREE")
 RUNG_LABELS = {"R0": "Dimensional / Type-Shape Check", "R1": "Attention Pointer", "R2": "Cue Prime",
                "R3": "Scalar / 2D Base Case", "R4": "Worked Isomorphic Analog"}
 RUNG_ORDER = ["R0", "R1", "R2", "R3", "R4"]
@@ -560,10 +559,27 @@ async def get_state(session_id: str) -> dict[str, Any]:
 
 
 # ------------------------------------------------------------------ assessment core
+def log_prediction(conn, n: dict[str, Any], trace_id: str, session_id: str, phase: str, y: int, q: float) -> dict[str, Any]:
+    """Record what the model expected for this answer, from the node state before it is updated (model-eval-85 FR1)."""
+    t = cm.elapsed_days(n["last_reviewed_at"])
+    r = cm.retrievability(t, n["fsrs_stability"])
+    k_all, n_all, k_node, n_node = db.prediction_counts(conn, n["id"])
+    row = {"trace_id": trace_id, "session_id": session_id, "node_id": n["id"], "phase": phase, "elapsed_days": t,
+           "r_at_review": r, "p_mastery_before": n["bkt_p_mastery"],
+           **cm.predict_correct(n["bkt_p_mastery"], n["bkt_p_slip"], n["bkt_p_guess"], r),
+           "p_global_baseline": cm.laplace_rate(k_all, n_all), "p_node_baseline": cm.laplace_rate(k_node, n_node),
+           "y": y, "success": int(bool(y) and q >= cm.SUCCESS_MIN_QUALITY)}
+    db.insert_prediction(conn, row)
+    return row
+
+
 def apply_assessment(conn, session: dict[str, Any], node_id: str, y: int, q: float, miss: str, confidence: float,
-                     hint: str, partial: bool, cue_dim: Optional[str], prosody: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Update BKT, FSRS, Brier, hypercorrection, cue breadth and propagate beliefs. Returns (node_update, trace_fields)."""
+                     hint: str, partial: bool, cue_dim: Optional[str], prosody: dict[str, Any],
+                     trace_id: str, phase: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Log the model's prediction, then update BKT, FSRS, Brier, hypercorrection, cue breadth and propagate beliefs.
+    Returns (node_update, trace_fields)."""
     n = _node(conn, node_id)
+    log_prediction(conn, n, trace_id, session["id"], phase, y, q)
     outcome = cm.classify_outcome(y, confidence, hint, q, partial)
     brier = cm.brier_score(confidence, y)
     new_flag, resolved = cm.hypercorrection_transition(n["hypercorrection_flag"], y, confidence, q)
@@ -652,6 +668,8 @@ async def submit(session_id: str, sub: dict[str, Any]) -> dict[str, Any]:
     created: list[str] = []
     delta_before = session["step_velocity_delta"]
     remedial = None
+    reading: Optional[cm.ControllerReading] = None
+    trace_id = db.new_id("tr")
     trace_fields: dict[str, Any] = {"is_correct": 0, "trace_quality_score": 0.5, "outcome": "EXPLORATION_LOGGED",
                                     "max_hint_rung": "NONE", "miss_class": "NONE", "brier_score": 0.0,
                                     "bkt_mastery_before": node["bkt_p_mastery"], "bkt_mastery_after": node["bkt_p_mastery"],
@@ -743,7 +761,8 @@ async def submit(session_id: str, sub: dict[str, Any]) -> dict[str, Any]:
         if diag.get("buggy_rule_id"):
             created.append(diag["buggy_rule_id"])
         with db.tx() as conn:
-            upd, trace_fields = apply_assessment(conn, session, node_id, y, q, miss, confidence, hint, partial, cue_dim, prosody)
+            upd, trace_fields = apply_assessment(conn, session, node_id, y, q, miss, confidence, hint, partial, cue_dim,
+                                                   prosody, trace_id, active["phase"] or kind)
         node_updates.append(upd)
         hist_entry.update(outcome=trace_fields["outcome"], is_correct=y, q=q)
         if trace_fields["outcome"] == "HIGH_CONFIDENCE_ERROR":
@@ -758,8 +777,8 @@ async def submit(session_id: str, sub: dict[str, Any]) -> dict[str, Any]:
 
     # ---- controller updates (plan statuses, beliefs, Δ, remediation)
     with db.tx() as conn:
-        trace_id = db.insert_trace(conn, {
-            "session_id": session_id, "step_index": active["step_index"], "phase": active["phase"] or "READING",
+        db.insert_trace(conn, {
+            "id": trace_id, "session_id": session_id, "step_index": active["step_index"], "phase": active["phase"] or "READING",
             "target_node_ids": active["target_node_ids"], "cue_level": active["cue_level"],
             "prompt_shown_latex": (active.get("prompt_latex") or active.get("body_markdown") or "")[:4000],
             "options": active.get("options", []) or active.get("proof_steps", []),
@@ -795,16 +814,22 @@ async def submit(session_id: str, sub: dict[str, Any]) -> dict[str, Any]:
             else:
                 item["status"] = "pending"
             item["belief"] = trace_fields["bkt_mastery_after"]
-            recent = [t for t in db.session_traces(conn, session_id) if t["phase"] in ASSESSED_PHASES]
-            new_delta, action = cm.update_step_delta(session["step_velocity_delta"], recent)
-            session["step_velocity_delta"] = new_delta
-            if action == "REMEDIATE" and session["mode"] in TEACH_MODES + ("PRACTICE",):
+            ctl = session.setdefault("_controller", {})
+            reading = cm.difficulty_controller(session["step_velocity_delta"], int(ctl.get("cue_level", 1)),
+                                               db.recent_successes(conn, cm.SUCCESS_WINDOW), trace_fields,
+                                               config.load_prefs()["target_success"])
+            session["step_velocity_delta"] = reading.delta
+            ctl["cue_level"] = reading.cue_level
+            ctl["last_reading"] = {"action": reading.action, "summary": reading.summary,
+                                   "recent_success": reading.recent_success, "target": reading.target}
+            if reading.action == "REMEDIATE" and session["mode"] in TEACH_MODES + ("PRACTICE",):
                 reason = trace_fields["miss_class"] if trace_fields["miss_class"] != "NONE" else trace_fields["outcome"]
                 remedial = _splice_remedial(conn, session, node_id, reason)
                 if remedial:
                     feedback.append(f"↩︎ Δ dropped to 0.5 — spliced a remedial step on `{remedial}` before revisiting this node.")
-            elif action == "ACCELERATE":
-                feedback.append(f"⏩ Two clean, confident, high-quality solves: Δ raised to {new_delta:.1f}; trivial bridges will be compressed.")
+            elif reading.action in ("HARDER", "EASIER"):
+                feedback.append(f"{'⏩' if reading.action == 'HARDER' else '⏪'} {reading.summary} "
+                                f"(step size Δ {reading.delta:.1f}, practice level {reading.cue_level}).")
         elif kind in ("PREDICT", "READING", "PRODUCTIVE_FAILURE"):
             pass
         session["history_steps"].append(hist_entry)
@@ -825,7 +850,10 @@ async def submit(session_id: str, sub: dict[str, Any]) -> dict[str, Any]:
     await hub.broadcast("graph_updated", {"reason": "assessment"})
     return {"trace": trace, "feedback_markdown": "\n\n".join(feedback + ([diag_md] if diag_md else [])),
             "node_updates": node_updates, "delta_before": delta_before, "delta_after": session["step_velocity_delta"],
-            "remedial_spliced": remedial, "created_nodes": created, "state": state}
+            "remedial_spliced": remedial, "created_nodes": created, "state": state,
+            "controller": ({"action": reading.action, "summary": reading.summary, "recent_success": reading.recent_success,
+                            "target": reading.target, "window_n": reading.window_n, "delta": reading.delta,
+                            "practice_level": reading.cue_level} if reading else None)}
 
 
 async def advance(session_id: str) -> dict[str, Any]:

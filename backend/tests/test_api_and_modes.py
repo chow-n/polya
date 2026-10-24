@@ -251,3 +251,39 @@ def test_sympy_verifier_and_api(client):
                                                 "target_node_id": "prop_var_indep_sum"})
         assert st.status_code == 200, (mode, sub, st.text)
         assert st.json()["active_step"]["kind"] != "COMPLETE"
+
+
+def test_model_eval_predictions_target_and_controller(client):
+    """docs/specs/model-eval-85: graded answers log predictions, the scoreboard has its shape, the target persists."""
+    from backend import config, db
+    with db.ro() as conn:
+        before = conn.execute("SELECT COUNT(*) FROM model_predictions").fetchone()[0]
+    st = client.post("/api/sessions", json={"mode": "PRACTICE", "target_goal": "practice",
+                                            "target_node_id": "prop_var_indep_sum", "cue_level": 1}).json()
+    groups = hidden_meta(st["session"]["id"])["concept_groups"]
+    res = answer(client, st, text=" ".join(g[0] for g in groups) + " " + GOOD)
+    with db.ro() as conn:
+        rows = [dict(r) for r in conn.execute("SELECT * FROM model_predictions ORDER BY rowid")]
+    assert len(rows) == before + 1
+    row = rows[-1]
+    assert row["trace_id"] == res["trace"]["id"] and row["node_id"] == "prop_var_indep_sum"
+    assert row["p_mastery_before"] == pytest.approx(res["trace"]["bkt_mastery_before"])   # logged before the update
+    assert 0 < row["p_combined"] < 1 and 0 < row["r_at_review"] <= 1 and row["y"] == res["trace"]["is_correct"]
+    ctl = res["controller"]
+    assert ctl["action"] in ("REMEDIATE", "HARDER", "EASIER", "HOLD", "WARMING_UP") and ctl["target"] == 0.85
+    assert ctl["summary"]
+
+    ev = client.get("/api/model-eval").json()
+    assert ev["n"] == len(rows) and ev["enough_data"] is (len(rows) >= 50) and ev["min_answers"] == 50
+    assert [p["name"] for p in ev["predictors"]][:2] == ["p_combined", "p_bkt"]
+    assert all(len(p["calibration_bins"]) == 5 and p["n"] == ev["n"] for p in ev["predictors"])
+    assert ev["controller"]["target"] == 0.85 and ev["controller"]["window_n"] == min(10, ev["n"])
+
+    assert client.get("/api/settings").json()["target_success"] == 0.85
+    assert client.put("/api/settings", json={"target_success": 0.9}).json()["target_success"] == 0.9
+    assert config.load_prefs()["target_success"] == 0.9 and "key" not in config.prefs_path().read_text().lower()
+    assert client.get("/api/model-eval").json()["controller"]["target"] == 0.9
+    assert client.put("/api/settings", json={"target_success": 0.7}).status_code == 422
+    config.prefs_path().write_text("{not json")
+    assert client.get("/api/settings").json()["target_success"] == 0.85   # corrupt file → defaults
+    client.put("/api/settings", json={"target_success": 0.85})

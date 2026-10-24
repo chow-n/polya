@@ -14,6 +14,12 @@
 - Backend venv: `backend/.venv` (uv). Tests: `make test` (forces `LEARNHARNESS_LLM=deterministic`). Frontend: `cd frontend && npm run build`.
 - Science additions: Murphy Brier decomposition, desired-retention due dates (r=0.90), interleaving penalty, pretesting-effect rationale.
 
+## Model scoreboard + 85% controller (approved 2026-10-24, docs/specs/model-eval-85/SPEC.md)
+- `model_predictions` side table (original `telemetry_traces` DDL untouched), logged in `orchestrator.log_prediction`
+  before every model update; `GET /api/model-eval` (`backend/model_eval.py`), `./polya eval`, `python -m backend.simulate`.
+- `cm.difficulty_controller` supersedes §4.2's "two clean answers → Δ+0.5": EWMA success (α 0.3, last 10, all sessions),
+  target 80/85/90 (`~/Polya/prefs.json`) ± 0.07 → Δ ±0.5 and practice cue level ±1; hard-failure reset is kept.
+
 ---
 # Verbatim specification
 

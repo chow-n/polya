@@ -29,9 +29,22 @@ All request/response bodies are the Pydantic models in `backend/models.py` (mirr
 | PUT | /api/scratch | ScratchWrite | ScratchOut |
 | POST | /api/demo-telemetry | DemoTelemetry | `{recorded:true, cue_updates:string[]}` |
 | GET | /api/settings | – | SettingsOut |
-| PUT | /api/settings | SettingsUpdate | SettingsOut |
+| PUT | /api/settings | SettingsUpdate | SettingsOut (`target_success` ∈ {0.80, 0.85, 0.90}, else 422; persisted in `~/Polya/prefs.json`) |
+| GET | /api/model-eval | – | ModelEvalOut (prediction scoreboard + difficulty controller state) |
 
 Errors: FastAPI default `{detail: string}` with 4xx.
+
+## Model scoreboard and difficulty controller (docs/specs/model-eval-85)
+- Every graded answer (PROBE, CHECK, PRACTICE_CHUNK, REFEREE/FEYNMAN) writes one `model_predictions` row *before* the model
+  updates: `p_bkt`, `p_memory` (= R at review), `p_combined`, and the baselines `p_global_baseline` / `p_node_baseline`
+  ((k+1)/(n+2) running accuracy), with `y` and `success` (= correct and trace quality ≥ 0.45).
+- `ModelEvalOut {n, enough_data (n ≥ 50), min_answers, predictors: [{name, label, baseline, n, log_loss, brier, auc,
+  calibration_bins: [{lo, hi, count, mean_predicted, observed}]×5}], controller: {target, recent_success, window_n, band,
+  delta, practice_level, last_action, last_summary}}`. `auc` is null when only one outcome has been seen.
+- `StepResult.controller` (graded answers outside PROBE): `{action: REMEDIATE|HARDER|EASIER|HOLD|WARMING_UP, summary,
+  recent_success, target, window_n, delta, practice_level}`. Recent success = EWMA (α 0.3) over the last 10 graded answers
+  across sessions; outside target ± 0.07 it moves Δ ±0.5 and the practice cue level ±1. Hard failures still reset Δ to 0.5
+  and splice a remedial step.
 
 ## Step flow by mode (StepPayload.kind)
 - PROBE: PROBE×(≤4, chosen by EIG; `eig_table` filled, `options_locked=true`) → per unmastered plan node: PREDICT → READING → CHECK → … → COMPLETE

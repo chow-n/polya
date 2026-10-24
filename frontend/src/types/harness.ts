@@ -333,6 +333,54 @@ export interface StepResult {
   remedial_spliced: string | null;
   created_nodes: string[];
   state: SessionState;
+  controller?: ControllerReading | null;
+}
+
+/** The success-rate difficulty controller's reading after a graded answer (docs/specs/model-eval-85). */
+export interface ControllerReading {
+  action: 'REMEDIATE' | 'HARDER' | 'EASIER' | 'HOLD' | 'WARMING_UP';
+  summary: string;
+  recent_success: number | null;
+  target: number;
+  window_n: number;
+  delta: number;
+  practice_level: number;
+}
+
+export interface CalibrationBin {
+  lo: number;
+  hi: number;
+  count: number;
+  mean_predicted: number | null;
+  observed: number | null;
+}
+
+export interface PredictorScore {
+  name: string;
+  label: string;
+  baseline: boolean;
+  n: number;
+  log_loss: number | null;
+  brier: number | null;
+  auc: number | null;
+  calibration_bins: CalibrationBin[];
+}
+
+export interface ModelEvalOut {
+  n: number;
+  enough_data: boolean;
+  min_answers: number;
+  predictors: PredictorScore[];
+  controller: {
+    target: number;
+    recent_success: number | null;
+    window_n: number;
+    band: number;
+    delta: number | null;
+    practice_level: number | null;
+    last_action: string | null;
+    last_summary: string | null;
+  };
 }
 
 export interface HintRequest {
@@ -515,7 +563,10 @@ export interface SettingsOut {
   native_dictation_available: boolean; // on-device macOS speech, Pólya.app only
   claude_cli_available: boolean;
   model_overrides: Record<string, string>;
+  target_success: number; // difficulty target, persisted in ~/Polya/prefs.json
 }
+
+export const TARGET_CHOICES = [0.8, 0.85, 0.9] as const;
 
 export interface SettingsUpdate {
   provider?: LLMProvider | null;
@@ -525,6 +576,7 @@ export interface SettingsUpdate {
   openrouter_api_key?: string | null;
   deepgram_api_key?: string | null;
   model_overrides?: Record<string, string> | null;
+  target_success?: number | null;
 }
 
 export interface HealthOut {

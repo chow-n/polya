@@ -2447,3 +2447,31 @@ textarea.code,
 .sheet-sec .details-toggle {
   padding: 4px 0;
 }
+
+/* ---- model scoreboard (Settings → Advanced; docs/specs/model-eval-85) ---- */
+.scoreboard {
+  margin-top: 16px;
+}
+.scoreboard .dtable {
+  margin: 8px 0;
+  font-size: var(--t-s);
+}
+.scoreboard .dtable.greyed td {
+  color: var(--ink-3);
+}
+.calib {
+  display: block;
+}
+.calib-cell {
+  fill: var(--paper-2);
+}
+.calib-bar {
+  fill: var(--accent);
+  opacity: 0.55;
+}
+.calib-tick {
+  fill: var(--ink);
+}
+.scoreboard .dtable th {
+  white-space: nowrap;
+}

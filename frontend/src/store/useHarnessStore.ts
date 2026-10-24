@@ -27,6 +27,7 @@ import {
   type HintOut,
   type HintRequest,
   type LadderRung,
+  type ModelEvalOut,
   type NodeDetail,
   type PracticeQueueItem,
   type ReadingNote,
@@ -124,6 +125,7 @@ export const api = {
   demoTelemetry: (body: DemoTelemetry) => request<DemoTelemetryAck>('POST', '/api/demo-telemetry', body),
   settings: () => request<SettingsOut>('GET', '/api/settings'),
   updateSettings: (body: SettingsUpdate) => request<SettingsOut>('PUT', '/api/settings', body),
+  modelEval: () => request<ModelEvalOut>('GET', '/api/model-eval'),
 };
 
 // =================================================================== state types

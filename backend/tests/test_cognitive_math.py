@@ -156,15 +156,17 @@ def test_cue_update_and_practice_priority():
     assert doms[0] == "A" and doms[1] == "B"  # B scores lowest, but interleaving pulls it forward
 
 
-def test_step_delta_controller():
-    clean = {"outcome": "SOLVED_CLEAN", "trace_quality_score": 0.85, "confidence_slider": 0.8, "miss_class": "NONE"}
-    assert cm.update_step_delta(1.0, [clean]) == (1.0, "HOLD")
-    assert cm.update_step_delta(1.0, [clean, clean]) == (1.5, "ACCELERATE")
-    assert cm.update_step_delta(2.5, [clean, clean]) == (2.5, "ACCELERATE")
-    fail = {"outcome": "FAILED", "trace_quality_score": 0.3, "confidence_slider": 0.4, "miss_class": "FALSE_ANALOGY"}
-    assert cm.update_step_delta(2.0, [clean, fail]) == (0.5, "REMEDIATE")
-    prereq = {**clean, "outcome": "PARTIAL", "miss_class": "MISSING_PREREQUISITE"}
-    assert cm.update_step_delta(1.5, [prereq]) == (0.5, "REMEDIATE")
+def test_difficulty_controller_hard_failure_unchanged():
+    """The pre-existing hard-failure rule survives the 85% controller: Δ → 0.5 whatever the success rate."""
+    good = [1] * 10
+    fail = {"outcome": "FAILED", "miss_class": "FALSE_ANALOGY"}
+    assert cm.difficulty_controller(2.0, 3, good, fail).action == "REMEDIATE"
+    assert cm.difficulty_controller(2.0, 3, good, fail).delta == 0.5
+    hce = {"outcome": "HIGH_CONFIDENCE_ERROR", "miss_class": "NONE"}
+    assert cm.difficulty_controller(1.5, 2, good, hce).delta == 0.5
+    prereq = {"outcome": "PARTIAL", "miss_class": "MISSING_PREREQUISITE"}
+    r = cm.difficulty_controller(1.5, 2, good, prereq)
+    assert (r.action, r.delta, r.cue_level) == ("REMEDIATE", 0.5, 2)
 
 
 def test_topological_depths():

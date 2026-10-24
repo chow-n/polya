@@ -285,6 +285,17 @@ class NodeUpdate(BaseModel):
     propagated_to: list[str] = Field(default_factory=list)
 
 
+class ControllerReadingOut(BaseModel):
+    """The success-rate difficulty controller's reading after a graded answer (docs/specs/model-eval-85)."""
+    action: Literal["REMEDIATE", "HARDER", "EASIER", "HOLD", "WARMING_UP"]
+    summary: str
+    recent_success: Optional[float] = None
+    target: float
+    window_n: int
+    delta: float
+    practice_level: int
+
+
 class StepResult(BaseModel):
     trace: TraceOut
     feedback_markdown: str
@@ -294,6 +305,7 @@ class StepResult(BaseModel):
     remedial_spliced: Optional[str] = None
     created_nodes: list[str] = Field(default_factory=list)
     state: SessionState
+    controller: Optional[ControllerReadingOut] = None
 
 
 class HintRequest(BaseModel):
@@ -459,6 +471,7 @@ class SettingsOut(BaseModel):
     native_dictation_available: bool   # on-device macOS speech, Pólya.app only
     claude_cli_available: bool
     model_overrides: dict[str, str]
+    target_success: float              # difficulty target, persisted in ~/Polya/prefs.json
 
 
 class SettingsUpdate(BaseModel):
@@ -469,6 +482,45 @@ class SettingsUpdate(BaseModel):
     openrouter_api_key: Optional[str] = None
     deepgram_api_key: Optional[str] = None
     model_overrides: Optional[dict[str, str]] = None
+    target_success: Optional[float] = None   # one of 0.80 / 0.85 / 0.90
+
+
+class CalibrationBinOut(BaseModel):
+    lo: float
+    hi: float
+    count: int
+    mean_predicted: Optional[float] = None
+    observed: Optional[float] = None
+
+
+class PredictorScoreOut(BaseModel):
+    name: str
+    label: str
+    baseline: bool
+    n: int
+    log_loss: Optional[float] = None
+    brier: Optional[float] = None
+    auc: Optional[float] = None
+    calibration_bins: list[CalibrationBinOut]
+
+
+class ControllerStateOut(BaseModel):
+    target: float
+    recent_success: Optional[float] = None
+    window_n: int
+    band: float
+    delta: Optional[float] = None
+    practice_level: Optional[int] = None
+    last_action: Optional[str] = None
+    last_summary: Optional[str] = None
+
+
+class ModelEvalOut(BaseModel):
+    n: int
+    enough_data: bool
+    min_answers: int
+    predictors: list[PredictorScoreOut]
+    controller: ControllerStateOut
 
 
 # ---------------------------------------------------------------- websocket

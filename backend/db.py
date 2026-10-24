@@ -127,9 +127,31 @@ CREATE TABLE IF NOT EXISTS subagent_artifacts (
     created_at TEXT NOT NULL
 );
 
+-- Side table (docs/specs/model-eval-85 D1): what the learner model predicted for each graded answer, logged
+-- before the update. Kept separate so the original telemetry_traces DDL stays exact.
+CREATE TABLE IF NOT EXISTS model_predictions (
+    id TEXT PRIMARY KEY,
+    trace_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    elapsed_days REAL NOT NULL,
+    r_at_review REAL NOT NULL,
+    p_mastery_before REAL NOT NULL,
+    p_bkt REAL NOT NULL,
+    p_memory REAL NOT NULL,
+    p_combined REAL NOT NULL,
+    p_global_baseline REAL NOT NULL,
+    p_node_baseline REAL NOT NULL,
+    y INTEGER NOT NULL,
+    success INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_traces_session ON telemetry_traces(session_id, step_index);
 CREATE INDEX IF NOT EXISTS idx_edges_conclusion ON hyperedges(conclusion_node_id);
 CREATE INDEX IF NOT EXISTS idx_artifacts_session ON subagent_artifacts(session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_predictions_node ON model_predictions(node_id);
 """
 
 NODE_COLUMNS = [
@@ -391,6 +413,33 @@ def node_traces(conn: sqlite3.Connection, node_id: str, limit: int = 50) -> list
         "SELECT * FROM telemetry_traces WHERE target_node_ids_json LIKE ? ORDER BY created_at DESC LIMIT ?",
         (f'%"{node_id}"%', limit))
     return [_trace_row(r) for r in rows]
+
+
+PREDICTION_COLUMNS = ["id", "trace_id", "session_id", "node_id", "phase", "created_at", "elapsed_days", "r_at_review",
+                      "p_mastery_before", "p_bkt", "p_memory", "p_combined", "p_global_baseline", "p_node_baseline",
+                      "y", "success"]
+
+
+def prediction_counts(conn: sqlite3.Connection, node_id: str) -> tuple[int, int, int, int]:
+    """(correct, answered) over all earlier graded answers, then the same for one node."""
+    g = conn.execute("SELECT COALESCE(SUM(y), 0), COUNT(*) FROM model_predictions").fetchone()
+    n = conn.execute("SELECT COALESCE(SUM(y), 0), COUNT(*) FROM model_predictions WHERE node_id=?", (node_id,)).fetchone()
+    return g[0], g[1], n[0], n[1]
+
+
+def insert_prediction(conn: sqlite3.Connection, p: dict[str, Any]) -> str:
+    row = {c: p.get(c) for c in PREDICTION_COLUMNS}
+    row["id"] = row["id"] or new_id("mp")
+    row["created_at"] = row["created_at"] or now_iso()
+    conn.execute(f"INSERT INTO model_predictions ({', '.join(row)}) VALUES ({', '.join('?' * len(row))})",
+                 tuple(row.values()))
+    return row["id"]
+
+
+def recent_successes(conn: sqlite3.Connection, limit: int) -> list[int]:
+    """success (0/1) of the last `limit` graded answers across all sessions, oldest first."""
+    rows = conn.execute("SELECT success FROM model_predictions ORDER BY rowid DESC LIMIT ?", (limit,)).fetchall()
+    return [r[0] for r in reversed(rows)]
 
 
 def calibration_pairs(conn: sqlite3.Connection) -> list[tuple[float, int]]:

@@ -7,6 +7,7 @@ Pure functions only: no database or I/O. The orchestrator reads node rows, calls
 - Expected-information-gain active probe selection over the prerequisite DAG (§3.3)
 - Brier score, hypercorrection, Murphy (1973) Brier decomposition, cue-breadth update,
   practice priority with interleaving (§3.4 + SPEC.md science additions)
+- Prediction scoreboard metrics and the success-rate difficulty controller (docs/specs/model-eval-85)
 """
 from __future__ import annotations
 
@@ -24,7 +25,6 @@ BJORK_WINDOW = (0.70, 0.85)
 HYPERCORRECTION_CONFIDENCE = 0.75
 HYPERCORRECTION_BONUS = 1.25
 CUE_DIMENSIONS = ("cue_symbolic", "cue_disguised_notation", "cue_geometric", "cue_computational", "cue_adversarial")
-DELTA_MIN, DELTA_MAX, DELTA_STEP = 0.5, 2.5, 0.5
 
 
 def clip(x: float, lo: float, hi: float) -> float:
@@ -437,23 +437,133 @@ def murphy_decomposition(pairs: Sequence[tuple[float, int]], n_bins: int = 10) -
     )
 
 
-# ------------------------------------------------------------------ §4.2 Δ-controller
-def update_step_delta(delta: float, recent: Sequence[Mapping]) -> tuple[float, str]:
-    """Return (new_delta, action) given the most recent step traces (newest last).
+# ------------------------------------------------------------------ model scoreboard (docs/specs/model-eval-85)
+P_CLIP = 1e-4
+CALIBRATION_BINS = 5
+ENOUGH_ANSWERS = 50
+SUCCESS_MIN_QUALITY = 0.45   # below this a correct answer counts as right-for-the-wrong-reason
 
-    action ∈ {"ACCELERATE", "REMEDIATE", "HOLD"}.
+
+def predict_correct(p_mastery: float, slip: float, guess: float, r: float) -> dict[str, float]:
+    """P(next answer correct) from mastery alone, memory alone, and both (mastered AND still retrievable)."""
+    known = p_mastery * r
+    return {"p_bkt": p_mastery * (1 - slip) + (1 - p_mastery) * guess, "p_memory": r,
+            "p_combined": known * (1 - slip) + (1 - known) * guess}
+
+
+def laplace_rate(k: int, n: int) -> float:
+    """Running accuracy with a uniform prior: (k+1)/(n+2), so 0.5 before any answer."""
+    return (k + 1) / (n + 2)
+
+
+def log_loss(pairs: Sequence[tuple[float, int]]) -> Optional[float]:
+    if not pairs:
+        return None
+    return -sum(math.log(clip(p, P_CLIP, 1 - P_CLIP)) if y else math.log(1 - clip(p, P_CLIP, 1 - P_CLIP))
+                for p, y in pairs) / len(pairs)
+
+
+def mean_brier(pairs: Sequence[tuple[float, int]]) -> Optional[float]:
+    return sum(brier_score(p, y) for p, y in pairs) / len(pairs) if pairs else None
+
+
+def auc(pairs: Sequence[tuple[float, int]]) -> Optional[float]:
+    """Rank-based AUC (Mann–Whitney U) with mid-ranks for ties; None when only one class is present."""
+    n_pos = sum(1 for _, y in pairs if y)
+    n_neg = len(pairs) - n_pos
+    if n_pos == 0 or n_neg == 0:
+        return None
+    order = sorted(range(len(pairs)), key=lambda i: pairs[i][0])
+    ranks = [0.0] * len(pairs)
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and pairs[order[j + 1]][0] == pairs[order[i]][0]:
+            j += 1
+        for k in range(i, j + 1):
+            ranks[order[k]] = (i + j) / 2 + 1
+        i = j + 1
+    rank_sum = sum(ranks[i] for i, (_, y) in enumerate(pairs) if y)
+    return (rank_sum - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
+
+
+def calibration_bins(pairs: Sequence[tuple[float, int]], n_bins: int = CALIBRATION_BINS) -> list[dict]:
+    bins: list[list[tuple[float, int]]] = [[] for _ in range(n_bins)]
+    for p, y in pairs:
+        bins[min(n_bins - 1, int(clip(p, 0.0, 1.0) * n_bins))].append((p, y))
+    return [{"lo": k / n_bins, "hi": (k + 1) / n_bins, "count": len(b),
+             "mean_predicted": sum(p for p, _ in b) / len(b) if b else None,
+             "observed": sum(y for _, y in b) / len(b) if b else None} for k, b in enumerate(bins)]
+
+
+def score_predictor(name: str, pairs: Sequence[tuple[float, int]]) -> dict:
+    return {"name": name, "n": len(pairs), "log_loss": log_loss(pairs), "brier": mean_brier(pairs),
+            "auc": auc(pairs), "calibration_bins": calibration_bins(pairs)}
+
+
+# ------------------------------------------------------------------ difficulty controller (supersedes §4.2 Δ rule)
+DELTA_MIN, DELTA_MAX, DELTA_STEP = 0.5, 2.5, 0.5
+CUE_MIN, CUE_MAX = 1, 4
+DEFAULT_TARGET = 0.85
+SUCCESS_BAND = 0.07
+EWMA_ALPHA = 0.3
+SUCCESS_WINDOW = 10
+MIN_ANSWERS_FOR_CONTROL = 3
+
+
+def recent_success(successes: Sequence[int], alpha: float = EWMA_ALPHA, window: int = SUCCESS_WINDOW) -> Optional[float]:
+    """Exponentially weighted success rate over the last `window` graded answers (oldest first).
+
+    Weight (1 − α)^k for the answer k steps back, normalised so the estimate needs no starting value.
     """
-    if not recent:
-        return delta, "HOLD"
-    last = recent[-1]
-    if last["outcome"] in ("FAILED", "HIGH_CONFIDENCE_ERROR") or last.get("miss_class") == "MISSING_PREREQUISITE":
-        return DELTA_MIN, "REMEDIATE"
-    if len(recent) >= 2 and all(
-        t["outcome"] == "SOLVED_CLEAN" and t["trace_quality_score"] >= 0.80 and t["confidence_slider"] >= 0.75
-        for t in recent[-2:]
-    ):
-        return min(DELTA_MAX, delta + DELTA_STEP), "ACCELERATE"
-    return delta, "HOLD"
+    last = list(successes)[-window:]
+    if not last:
+        return None
+    w = [(1 - alpha) ** k for k in range(len(last))][::-1]
+    return sum(wi * s for wi, s in zip(w, last)) / sum(w)
+
+
+@dataclass
+class ControllerReading:
+    action: str                    # REMEDIATE | HARDER | EASIER | HOLD | WARMING_UP
+    delta: float
+    cue_level: int
+    recent_success: Optional[float]
+    window_n: int
+    target: float
+
+    @property
+    def summary(self) -> str:
+        if self.action == "REMEDIATE":
+            return "Hard miss → back to small steps and a prerequisite review"
+        if self.recent_success is None or self.action == "WARMING_UP":
+            return f"Measuring your success rate ({self.window_n}/{MIN_ANSWERS_FOR_CONTROL} answers so far)"
+        head = f"Recent success {self.recent_success:.0%} (target {self.target:.0%})"
+        return head + {"HARDER": " → bigger steps, harder problems", "EASIER": " → smaller steps, easier problems",
+                       "HOLD": " → keeping the pace"}[self.action]
+
+
+def difficulty_controller(delta: float, cue_level: int, successes: Sequence[int], last: Mapping,
+                          target: float = DEFAULT_TARGET) -> ControllerReading:
+    """Keep the recent success rate near `target` (Wilson et al. 2019's 85% rule, as a tunable heuristic).
+
+    A hard failure (FAILED, HIGH_CONFIDENCE_ERROR or MISSING_PREREQUISITE) resets Δ to its minimum as before;
+    otherwise at most one notch per answer: Δ ±0.5 within [0.5, 2.5] and practice cue level ±1 within [1, 4].
+    `successes` are 0/1 over graded answers across sessions, oldest first, including the current one.
+    """
+    window_n = min(len(successes), SUCCESS_WINDOW)
+    rate = recent_success(successes)
+    if last.get("outcome") in ("FAILED", "HIGH_CONFIDENCE_ERROR") or last.get("miss_class") == "MISSING_PREREQUISITE":
+        return ControllerReading("REMEDIATE", DELTA_MIN, cue_level, rate, window_n, target)
+    if len(successes) < MIN_ANSWERS_FOR_CONTROL:
+        return ControllerReading("WARMING_UP", delta, cue_level, rate, window_n, target)
+    if rate > target + SUCCESS_BAND:
+        return ControllerReading("HARDER", min(DELTA_MAX, delta + DELTA_STEP), min(CUE_MAX, cue_level + 1),
+                                 rate, window_n, target)
+    if rate < target - SUCCESS_BAND:
+        return ControllerReading("EASIER", max(DELTA_MIN, delta - DELTA_STEP), max(CUE_MIN, cue_level - 1),
+                                 rate, window_n, target)
+    return ControllerReading("HOLD", delta, cue_level, rate, window_n, target)
 
 
 # ------------------------------------------------------------------ graph depth

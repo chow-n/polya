@@ -4,8 +4,10 @@ Environment variables use the `POLYA_` prefix; the pre-rename `LEARNHARNESS_` pr
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
+import tempfile
 import threading
 from pathlib import Path
 
@@ -80,6 +82,38 @@ def migrate_legacy_home(home: Path, legacy: Path) -> str | None:
     legacy.rename(home)
     legacy.symlink_to(home, target_is_directory=True)
     return f"moved {legacy} -> {home} (symlink left at old path)"
+
+
+PREF_DEFAULTS = {"target_success": 0.85}
+TARGET_CHOICES = (0.80, 0.85, 0.90)
+
+
+def prefs_path() -> Path:
+    return HOME / "prefs.json"
+
+
+def load_prefs() -> dict:
+    """Non-secret preferences (docs/specs/model-eval-85 D3). Missing or corrupt file → defaults."""
+    out = dict(PREF_DEFAULTS)
+    try:
+        data = json.loads(prefs_path().read_text())
+    except (OSError, ValueError):
+        return out
+    if isinstance(data, dict) and data.get("target_success") in TARGET_CHOICES:
+        out["target_success"] = data["target_success"]
+    return out
+
+
+def save_prefs(**changes) -> dict:
+    """Merge and write atomically (temp file + rename). API keys never go here."""
+    prefs = {**load_prefs(), **{k: v for k, v in changes.items() if k in PREF_DEFAULTS}}
+    path = prefs_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".prefs-", suffix=".json")
+    with os.fdopen(fd, "w") as f:
+        json.dump(prefs, f, indent=2)
+    os.replace(tmp, path)
+    return prefs
 
 
 class RuntimeSettings:
