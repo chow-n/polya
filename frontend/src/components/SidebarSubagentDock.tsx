@@ -220,7 +220,7 @@ function SessionList(): JSX.Element {
             <button
               key={s.id}
               className={`session-item${s.id === activeId ? ' active' : ''}`}
-              onClick={() => void loadSession(s.id, s.mode === 'PRACTICE' || s.mode === 'REFEREE_DUEL' ? 3 : 1)}
+              onClick={() => void loadSession(s.id)}
               title={s.target_goal}
             >
               <div className="session-title truncate">{s.title}</div>

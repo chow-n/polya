@@ -1,30 +1,21 @@
 /**
- * Global Top Telemetry Bar (ARCHITECTURE_SPEC §6.1).
- * 4 view tabs · scratch.tex live-sync pill (+ view/edit modal) · Bjork window counter · hypercorrection badge ·
- * Brier calibration badge (Murphy 1973 decomposition popover + reliability diagram) · LLM engine + settings modal.
+ * Advanced telemetry strip (legacy status pills, shown only when Settings → Advanced telemetry is on):
+ * scratch.tex live-sync pill (+ view/edit) · Bjork window counter · due · hypercorrection badge ·
+ * Brier calibration badge (Murphy 1973 decomposition popover + reliability diagram) · LLM engine + WebSocket latency.
+ * Also exports the scratch.tex editor used by Settings → Workspace.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useHarnessStore, type TabId } from '../store/useHarnessStore';
-import { LLM_PROVIDERS, type CalibrationOut, type LLMProvider, type SettingsUpdate } from '../types/harness';
+import { useEffect, useRef, useState } from 'react';
+import { useHarnessStore } from '../store/useHarnessStore';
+import type { CalibrationOut } from '../types/harness';
 import { C, Kv, Modal, fmtDateTime, fx, pct, timeAgo, withAlpha } from './ui';
 
-const TABS: { id: TabId; label: string; short: string }[] = [
-  { id: 1, label: '1. Active Learning Session', short: 'Session' },
-  { id: 2, label: '2. Epistemic Hypergraph (2D/DAG)', short: 'Hypergraph' },
-  { id: 3, label: '3. Practice & Referee Arena', short: 'Arena' },
-  { id: 4, label: '4. Reasoning Chains & Vault', short: 'Vault' },
-];
-
-export default function TopTelemetryBar(): JSX.Element {
-  const tab = useHarnessStore((s) => s.tab);
-  const setTab = useHarnessStore((s) => s.setTab);
+export default function TelemetryPills(): JSX.Element {
   const stats = useHarnessStore((s) => s.stats);
   const wsStatus = useHarnessStore((s) => s.wsStatus);
   const wsLatency = useHarnessStore((s) => s.wsLatencyMs);
   const llmEngine = useHarnessStore((s) => s.llmEngine);
   const scratch = useHarnessStore((s) => s.scratch);
   const scratchEventAt = useHarnessStore((s) => s.scratchEventAt);
-  const modal = useHarnessStore((s) => s.modal);
   const openModal = useHarnessStore((s) => s.openModal);
   const backendOk = useHarnessStore((s) => s.backendOk);
   const [calOpen, setCalOpen] = useState(false);
@@ -59,30 +50,7 @@ export default function TopTelemetryBar(): JSX.Element {
           : C.amber;
 
   return (
-    <header className="topbar">
-      <div className="brand" title="LearnHarness — POMDP learner model">
-        <span className="brand-mark">◭</span>
-        <span className="brand-name">LearnHarness</span>
-      </div>
-
-      <nav className="tabs" role="tablist">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            role="tab"
-            aria-selected={tab === t.id}
-            className={`tab${tab === t.id ? ' active' : ''}`}
-            onClick={() => setTab(t.id)}
-            title={`${t.label}  (key ${t.id})`}
-          >
-            <span className="tab-long">{t.label}</span>
-            <span className="tab-short">
-              {t.id}. {t.short}
-            </span>
-          </button>
-        ))}
-      </nav>
-
+    <div className="pills-strip legacy-skin" aria-label="Advanced telemetry">
       <div className="pills">
         <button
           className={`pill sync${wsStatus === 'open' ? ' live' : ''}${recentlySynced ? ' flash' : ''}`}
@@ -134,22 +102,14 @@ export default function TopTelemetryBar(): JSX.Element {
           {calOpen && cal ? <CalibrationPopover cal={cal} meanMastery={stats?.mean_mastery ?? 0} /> : null}
         </div>
 
-        <button
-          className="pill"
-          onClick={() => openModal({ kind: 'settings' })}
-          title="LLM provider & API keys"
-        >
+        <div className="pill" title="LLM engine · WebSocket">
           <span className={`dot ws-${backendOk === false ? 'closed' : wsStatus}`} />
           <span className="pill-k">LLM</span>
           <span className="pill-v mono engine">{llmEngine}</span>
           <span className="pill-sub mono">{wsStatus === 'open' && wsLatency !== null ? `${wsLatency}ms` : wsStatus}</span>
-          <span className="gear">⚙</span>
-        </button>
+        </div>
       </div>
-
-      {modal?.kind === 'scratch' ? <ScratchModal onClose={() => openModal(null)} /> : null}
-      {modal?.kind === 'settings' ? <SettingsModal onClose={() => openModal(null)} /> : null}
-    </header>
+    </div>
   );
 }
 
@@ -230,7 +190,7 @@ function CalibrationPopover({ cal, meanMastery }: { cal: CalibrationOut; meanMas
   );
 }
 
-function ScratchModal({ onClose }: { onClose: () => void }): JSX.Element {
+export function ScratchModal({ onClose }: { onClose: () => void }): JSX.Element {
   const scratch = useHarnessStore((s) => s.scratch);
   const writeScratch = useHarnessStore((s) => s.writeScratch);
   const refreshScratch = useHarnessStore((s) => s.refreshScratch);
@@ -316,136 +276,6 @@ function ScratchModal({ onClose }: { onClose: () => void }): JSX.Element {
         Saved edits are broadcast to every client via the <span className="mono">scratch_update</span> WebSocket event; edits made in
         the terminal appear here live. Cmd/Ctrl+S saves.
       </div>
-    </Modal>
-  );
-}
-
-const KEY_FIELDS: { field: keyof SettingsUpdate; label: string; presentKey: string }[] = [
-  { field: 'anthropic_api_key', label: 'Anthropic', presentKey: 'anthropic' },
-  { field: 'gemini_api_key', label: 'Gemini', presentKey: 'gemini' },
-  { field: 'openai_api_key', label: 'OpenAI', presentKey: 'openai' },
-  { field: 'openrouter_api_key', label: 'OpenRouter', presentKey: 'openrouter' },
-  { field: 'deepgram_api_key', label: 'Deepgram (voice)', presentKey: 'deepgram' },
-];
-
-function keyPresent(present: Record<string, boolean>, k: string): boolean {
-  return Boolean(present[k] ?? present[`${k}_api_key`] ?? present[`${k.toUpperCase()}_API_KEY`]);
-}
-
-function SettingsModal({ onClose }: { onClose: () => void }): JSX.Element {
-  const settings = useHarnessStore((s) => s.settings);
-  const refreshSettings = useHarnessStore((s) => s.refreshSettings);
-  const updateSettings = useHarnessStore((s) => s.updateSettings);
-  const busy = useHarnessStore((s) => s.busy.settings);
-  const [provider, setProvider] = useState<LLMProvider>(settings?.provider ?? 'auto');
-  const [keys, setKeys] = useState<Record<string, string>>({});
-  const [overrides, setOverrides] = useState('');
-
-  useEffect(() => {
-    void refreshSettings();
-  }, [refreshSettings]);
-  useEffect(() => {
-    if (!settings) return;
-    setProvider(settings.provider);
-    setOverrides(
-      Object.entries(settings.model_overrides)
-        .map(([k, v]) => `${k}=${v}`)
-        .join('\n'),
-    );
-  }, [settings]);
-
-  const parsedOverrides = useMemo(() => {
-    const out: Record<string, string> = {};
-    overrides
-      .split('\n')
-      .map((l) => l.trim())
-      .filter(Boolean)
-      .forEach((l) => {
-        const i = l.indexOf('=');
-        if (i > 0) out[l.slice(0, i).trim()] = l.slice(i + 1).trim();
-      });
-    return out;
-  }, [overrides]);
-
-  const save = async (): Promise<void> => {
-    const body: SettingsUpdate = { provider, model_overrides: parsedOverrides };
-    for (const f of KEY_FIELDS) {
-      const v = keys[f.field]?.trim();
-      if (v) (body as Record<string, unknown>)[f.field] = v;
-    }
-    const res = await updateSettings(body);
-    if (res) setKeys({});
-  };
-
-  const present = settings?.keys_present ?? {};
-  return (
-    <Modal
-      title="Engine settings"
-      onClose={onClose}
-      footer={
-        <>
-          <span className="dim">Keys are sent once to the local backend and never displayed again.</span>
-          <span className="spacer" />
-          <button className="btn ghost" onClick={onClose}>
-            Close
-          </button>
-          <button className="btn primary" onClick={() => void save()} disabled={busy}>
-            {busy ? 'Saving…' : 'Apply'}
-          </button>
-        </>
-      }
-    >
-      <div className="settings-grid">
-        <Kv k="Active engine" v={settings?.active_engine ?? '—'} />
-        <Kv k="claude CLI" v={settings ? (settings.claude_cli_available ? 'available' : 'not found') : '—'} />
-        <Kv k="Deepgram relay" v={settings ? (settings.deepgram_available ? 'available (nova-3)' : 'off → browser SpeechRecognition') : '—'} />
-      </div>
-      <label className="field">
-        <span className="field-label">LLM provider</span>
-        <select value={provider} onChange={(e) => setProvider(e.target.value as LLMProvider)}>
-          {LLM_PROVIDERS.map((p) => (
-            <option key={p} value={p}>
-              {p === 'auto'
-                ? 'auto — first available key → claude CLI → deterministic'
-                : p === 'claude_cli'
-                  ? 'claude_cli — local `claude -p` subprocess'
-                  : p === 'deterministic'
-                    ? 'deterministic — SymPy + graph engine (offline)'
-                    : p}
-            </option>
-          ))}
-        </select>
-      </label>
-      <div className="key-list">
-        {KEY_FIELDS.map((f) => (
-          <label key={f.field} className="field key-field">
-            <span className="field-label">
-              {f.label}
-              <span className={`key-state mono ${keyPresent(present, f.presentKey) ? 'ok' : ''}`}>
-                {keyPresent(present, f.presentKey) ? '● set' : '○ unset'}
-              </span>
-            </span>
-            <input
-              type="password"
-              autoComplete="off"
-              spellCheck={false}
-              placeholder={keyPresent(present, f.presentKey) ? '•••••••• (leave blank to keep)' : 'paste API key'}
-              value={keys[f.field] ?? ''}
-              onChange={(e) => setKeys((k) => ({ ...k, [f.field]: e.target.value }))}
-            />
-          </label>
-        ))}
-      </div>
-      <label className="field">
-        <span className="field-label">Model overrides (provider=model, one per line)</span>
-        <textarea
-          className="code-editor short"
-          spellCheck={false}
-          value={overrides}
-          placeholder={'anthropic=<model-id>\nopenrouter=<vendor/model-id>'}
-          onChange={(e) => setOverrides(e.target.value)}
-        />
-      </label>
     </Modal>
   );
 }

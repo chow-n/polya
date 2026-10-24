@@ -7,7 +7,10 @@
 import { useMemo } from 'react';
 import { useHarnessStore } from '../store/useHarnessStore';
 import type { PlanItem, PlanStatus } from '../types/harness';
-import { C, OUTCOME_COLOR, fx, masteryColor, withAlpha } from './ui';
+import { C as BASE, OUTCOME_COLOR, fx, masteryColor, withAlpha } from './ui';
+
+/** Legacy palette with the neutral tones taken from the theme tokens (SVG paint accepts CSS variables). */
+const C = { ...BASE, text: 'var(--text)', panel: 'var(--panel)', border: 'var(--border)', dim: 'var(--dim)' };
 
 const STATUS_COLOR: Record<PlanStatus, string> = {
   pending: C.slate,

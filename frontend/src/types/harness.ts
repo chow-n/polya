@@ -512,7 +512,7 @@ export interface SettingsOut {
   active_engine: string;
   keys_present: Record<string, boolean>;
   deepgram_available: boolean;
-  native_dictation_available: boolean; // on-device macOS speech, LearnHarness.app only
+  native_dictation_available: boolean; // on-device macOS speech, Pólya.app only
   claude_cli_available: boolean;
   model_overrides: Record<string, string>;
 }

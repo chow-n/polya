@@ -306,7 +306,7 @@ export class ProsodyAudioEngine {
       }
     }
 
-    // 2. transcript engine: server relay first (Deepgram, or on-device macOS speech inside LearnHarness.app),
+    // 2. transcript engine: server relay first (Deepgram, or on-device macOS speech inside Pólya.app),
     //    browser recognition as fallback
     let engine: TranscriptEngine = 'none';
     if (this.stream && this.deepgramHint !== false && typeof MediaRecorder !== 'undefined') {
@@ -508,7 +508,7 @@ export class ProsodyAudioEngine {
           return;
         }
         if (msg.type === 'ready') {
-          // server-side engine: Deepgram relay or on-device macOS speech (LearnHarness.app)
+          // server-side engine: Deepgram relay or on-device macOS speech (Pólya.app)
           this.relayEngine = msg.engine;
           if (settled && this.dictationWs === ws) {
             this.engine = msg.engine;

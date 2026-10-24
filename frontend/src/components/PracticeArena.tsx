@@ -1,27 +1,25 @@
 /**
- * Cue-Demand Practice Stream (ARCHITECTURE_SPEC §6.4.1).
- *  - header controls: cue obfuscation level 1–4, contrastive-pair mode, problem import from workspace/problems/, duel launchers
- *  - interleaved practice queue (Bjork window × forgetting × cue gap × hypercorrection − interleave penalty)
- *  - chunked stream-of-consciousness submission (Shift+Enter → POST /chunk)
- *  - 5-rung Socratic hint ladder R0→R4 (POST /hint, in order) with its FSRS stability-multiplier impact
- *  - collapsible assessment metadata card wired back into the hypergraph (StepResult)
+ * Practice card (PRACTICE_CHUNK): the problem, one "Think out loud" thread (Shift+Enter sends a part, feedback appears
+ * under it), hints one at a time in plain words, then "I'm done" with a confidence chip.
+ * Also exports the assessment data (shown under Details) and the Advanced practice launcher.
+ *  - chunks: POST /chunk · hints: POST /hint in order R0→R4 · final: POST /submit (payload unchanged)
  */
 import { useMemo, useState } from 'react';
-import { useHarnessStore } from '../store/useHarnessStore';
+import { useHarnessStore, type HeldResult } from '../store/useHarnessStore';
 import type { ChunkEvaluation, HintOut, LadderRung, StepPayload, StepResult } from '../types/harness';
 import { MathText } from '../utils/katexRenderer';
-import { StepHeader } from './EpistemicLockBox';
+import { ConfidenceChips, DetailRow, Details, MathField, PrimaryButton, Spinner as Spin, isChipValue, usePrimaryAction } from './kit';
 import { StepMedia } from './ReadingStreamBox';
-import TelemetryInputDock from './TelemetryInputDock';
+import { CardHead, ResultBlock, StepDetails, cleanPrompt } from './stepParts';
 import { Bar, C, Kv, OUTCOME_COLOR, Spinner, domainColor, fx, pct } from './ui';
 
 // ------------------------------------------------------------------ hint ladder model (§4 Law 6 + §3.1 rating map)
 export const RUNGS: { rung: LadderRung; label: string; blurb: string; cap: number; m: number }[] = [
-  { rung: 'R0', label: 'R0 Dimensional Check', blurb: 'Check shapes, domains, limits x→0, ∞.', cap: 3, m: 1.0 },
-  { rung: 'R1', label: 'R1 Attention Pointer', blurb: 'Quotes the exact expression where the slip sits.', cap: 3, m: 1.0 },
-  { rung: 'R2', label: 'R2 Cue Prime', blurb: 'Primes the upstream node without naming the move.', cap: 2, m: 0.55 },
-  { rung: 'R3', label: 'R3 Scalar/2D Base Case', blurb: 'Compute the d=1 or n=2 version first.', cap: 2, m: 0.55 },
-  { rung: 'R4', label: 'R4 Worked Analog', blurb: '3-line isomorphic worked solution to transfer.', cap: 2, m: 0.55 },
+  { rung: 'R0', label: 'Check the basics', blurb: 'Check shapes, domains, limits x→0, ∞.', cap: 3, m: 1.0 },
+  { rung: 'R1', label: 'Where to look', blurb: 'Points at the exact expression to look at.', cap: 3, m: 1.0 },
+  { rung: 'R2', label: 'A nudge', blurb: 'Reminds you of the idea underneath, without naming the move.', cap: 2, m: 0.55 },
+  { rung: 'R3', label: 'Try a simpler case', blurb: 'Work the one-dimensional or two-by-two version first.', cap: 2, m: 0.55 },
+  { rung: 'R4', label: 'A worked example', blurb: 'A short solved problem with the same shape.', cap: 2, m: 0.55 },
 ];
 const RATING_NAME: Record<number, string> = { 1: 'Again', 2: 'Hard', 3: 'Good', 4: 'Easy' };
 
@@ -59,7 +57,7 @@ export function AssessmentCard({ result, defaultOpen = true }: { result: StepRes
   const sDelta = t.fsrs_stability_after - t.fsrs_stability_before;
 
   return (
-    <div className="assess">
+    <div className="assess legacy-skin">
       <button className="assess-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         <span className="outcome-tag mono" style={{ color: OUTCOME_COLOR[t.outcome], borderColor: OUTCOME_COLOR[t.outcome] }}>
           {t.outcome}
@@ -352,186 +350,180 @@ export function ArenaLauncher(): JSX.Element {
   );
 }
 
-// ------------------------------------------------------------------ hint ladder
-function HintLadder({ step }: { step: StepPayload }): JSX.Element {
+// ------------------------------------------------------------------ hints (one at a time, plain labels)
+function Hints({ step }: { step: StepPayload }): JSX.Element | null {
+  const unlocked = new Map<LadderRung, HintOut>(step.hints_unlocked.map((h) => [h.rung, h]));
+  const shown = RUNGS.filter((r) => unlocked.has(r.rung));
+  if (!shown.length) return null;
+  return (
+    <div className="hints">
+      {shown.map((r, i) => (
+        <aside key={r.rung} className="hint">
+          <p className="hint-k">
+            Hint {i + 1} · {r.label}
+          </p>
+          <MathText text={unlocked.get(r.rung)?.hint_markdown ?? ''} />
+        </aside>
+      ))}
+    </div>
+  );
+}
+
+function HintButton({ step }: { step: StepPayload }): JSX.Element {
   const requestHint = useHarnessStore((s) => s.requestHint);
   const busy = useHarnessStore((s) => s.busy.hint);
-  const unlocked = new Map<LadderRung, HintOut>(step.hints_unlocked.map((h) => [h.rung, h]));
-  const nextIdx = RUNGS.findIndex((r) => !unlocked.has(r.rung));
-  const highest = [...RUNGS].reverse().find((r) => unlocked.has(r.rung));
-  const capNow = highest ? (unlocked.get(highest.rung)?.fsrs_rating_cap ?? highest.cap) : 4;
-  const mNow = highest ? (unlocked.get(highest.rung)?.stability_multiplier ?? highest.m) : 1.38;
-  const [openRung, setOpenRung] = useState<LadderRung | null>(null);
-  const shown = openRung ?? highest?.rung ?? null;
-
+  const unlocked = new Set(step.hints_unlocked.map((h) => h.rung));
+  const next = RUNGS.find((r) => !unlocked.has(r.rung));
   return (
-    <div className="ladder">
-      <div className="ladder-head">
-        <span>Socratic hint ladder</span>
-        <span className="mono dim">
-          best reachable rating: <b style={{ color: capNow >= 4 ? C.emerald : capNow === 3 ? C.cyan : C.amber }}>G={capNow} {RATING_NAME[capNow]}</b> · stability ×
-          {mNow.toFixed(2)}
-        </span>
-      </div>
-      <div className="ladder-steps">
-        {RUNGS.map((r, i) => {
-          const h = unlocked.get(r.rung);
-          const isNext = i === nextIdx;
-          return (
-            <button
-              key={r.rung}
-              className={`rung${h ? ' unlocked' : ''}${isNext ? ' next' : ''}${shown === r.rung ? ' shown' : ''}`}
-              disabled={(!h && !isNext) || busy}
-              onClick={() => {
-                if (h) setOpenRung(r.rung);
-                else
-                  void requestHint(r.rung).then((res) => {
-                    if (res) setOpenRung(res.rung);
-                  });
-              }}
-              title={`${r.blurb}\nUnlocking caps the FSRS rating at G=${h?.fsrs_rating_cap ?? r.cap} (stability ×${(h?.stability_multiplier ?? r.m).toFixed(2)})`}
-            >
-              <span className="rung-id mono">{r.rung}</span>
-              <span className="rung-label">{(h?.label ?? r.label).replace(/^R\d\s*/, '')}</span>
-              <span className="rung-m mono">
-                G≤{h?.fsrs_rating_cap ?? r.cap} · ×{(h?.stability_multiplier ?? r.m).toFixed(2)}
-              </span>
-              {busy && isNext ? <Spinner /> : null}
-            </button>
-          );
-        })}
-      </div>
-      {shown && unlocked.get(shown) ? (
-        <div className="hint-body">
-          <span className="mono tag amber">{unlocked.get(shown)?.label}</span>
-          <MathText text={unlocked.get(shown)?.hint_markdown ?? ''} />
-        </div>
-      ) : (
-        <div className="dim small">
-          No hints used: a clean solve can still earn G=4 (Easy, stability ×1.38). R0–R1 cap at Good (×1.00); R2–R4 cap at Hard (×0.55).
-        </div>
-      )}
-    </div>
+    <button
+      className="btn-secondary"
+      disabled={!next || busy}
+      onClick={() => next && void requestHint(next.rung)}
+      title={next ? `${next.label}. Hints make this count a little less toward your memory schedule.` : 'No more hints'}
+    >
+      {busy ? <Spin /> : null}
+      {!next ? 'No more hints' : unlocked.size ? 'Another hint' : 'Hint'}
+    </button>
   );
 }
 
-// ------------------------------------------------------------------ chunk stream
-function ChunkCard({ c }: { c: ChunkEvaluation }): JSX.Element {
+// ------------------------------------------------------------------ thread
+function ThreadItem({ c }: { c: ChunkEvaluation }): JSX.Element {
+  const tone = c.slip_detected ? 'bad' : c.demand_satisfied ? 'good' : 'plain';
   return (
-    <div className={`chunk${c.demand_satisfied ? ' ok' : ''}${c.slip_detected ? ' slip' : ''}`}>
-      <div className="chunk-head mono">
-        <span>chunk {c.chunk_index + 1}</span>
-        <span className={`tag ${c.demand_satisfied ? 'emerald' : 'slate'}`}>{c.demand_satisfied ? 'DEMAND MET' : 'demand open'}</span>
-        {c.slip_detected ? <span className="tag rose">SLIP</span> : null}
-        <span className="spacer" />
-        <span>q≈{fx(c.quality_estimate)}</span>
-        <Bar value={c.quality_estimate} />
-      </div>
-      <div className="chunk-text">
+    <li className={`thread-item tone-${tone}`}>
+      <div className="thread-you">
         <MathText text={c.text} />
       </div>
-      {c.feedback_markdown ? (
-        <div className="chunk-feedback">
-          <MathText text={c.feedback_markdown} />
+      {c.feedback_markdown || tone !== 'plain' ? (
+        <div className="thread-fb">
+          {tone === 'good' ? <span className="fb-mark">✓ On the right track. </span> : tone === 'bad' ? <span className="fb-mark">Check this step. </span> : null}
+          {c.feedback_markdown ? <MathText text={c.feedback_markdown.replace(/\bR[0-4]\s+/g, '')} inline /> : null}
         </div>
       ) : null}
-      <div className="chunk-concepts">
-        {c.matched_concepts.map((m) => (
-          <span key={`m-${m}`} className="concept ok">
-            ✓ {m}
-          </span>
-        ))}
-        {c.missing_concepts.map((m) => (
-          <span key={`x-${m}`} className="concept miss">
-            ○ {m}
-          </span>
-        ))}
-      </div>
-      {c.verifier_summary ? <div className="verifier mono small">∑ {c.verifier_summary}</div> : null}
+    </li>
+  );
+}
+
+function ChunkDetails({ chunks }: { chunks: ChunkEvaluation[] }): JSX.Element | null {
+  if (!chunks.length) return null;
+  return (
+    <div className="dsec">
+      <div className="dsec-k">Each part, as scored</div>
+      {chunks.map((c) => (
+        <DetailRow key={c.chunk_index} k={`Part ${c.chunk_index + 1}`}>
+          quality ≈ {fx(c.quality_estimate)} · {c.demand_satisfied ? 'key step found' : 'key step open'}
+          {c.slip_detected ? ' · slip' : ''}
+          {c.matched_concepts.length ? ` · covered: ${c.matched_concepts.join(', ')}` : ''}
+          {c.missing_concepts.length ? ` · missing: ${c.missing_concepts.join(', ')}` : ''}
+          {c.verifier_summary ? ` · ∑ ${c.verifier_summary}` : ''}
+        </DetailRow>
+      ))}
     </div>
   );
 }
 
-export default function PracticeArena({ step }: { step: StepPayload }): JSX.Element {
+export default function PracticeArena({ step, held }: { step: StepPayload; held?: HeldResult | null }): JSX.Element {
   const chunkLog = useHarnessStore((s) => s.chunkLog);
   const submitChunk = useHarnessStore((s) => s.submitChunk);
   const submitStep = useHarnessStore((s) => s.submitStep);
   const busyChunk = useHarnessStore((s) => s.busy.chunk);
   const busySubmit = useHarnessStore((s) => s.busy.submit);
-  const text = useHarnessStore((s) => s.draft.text);
+  const liveText = useHarnessStore((s) => s.draft.text);
+  const liveConfidence = useHarnessStore((s) => s.draft.confidence);
+  const setDraft = useHarnessStore((s) => s.setDraft);
   const graph = useHarnessStore((s) => s.graph);
-  const focus = useHarnessStore((s) => s.focusNodeInGraph);
   const sessionId = useHarnessStore((s) => s.activeSessionId);
+  const done = Boolean(held);
+  const text = held ? held.draft.text : liveText;
+  const confidence = held ? held.draft.confidence : liveConfidence;
 
   const chunks = useMemo(() => {
     const m = new Map<number, ChunkEvaluation>();
     step.chunks.forEach((c) => m.set(c.chunk_index, c));
-    if (chunkLog.stepId === step.step_id) chunkLog.items.forEach((c) => m.set(c.chunk_index, c));
+    if (held) held.chunks.forEach((c) => m.set(c.chunk_index, c));
+    else if (chunkLog.stepId === step.step_id) chunkLog.items.forEach((c) => m.set(c.chunk_index, c));
     return [...m.values()].sort((a, b) => a.chunk_index - b.chunk_index);
-  }, [step.chunks, step.step_id, chunkLog]);
+  }, [step.chunks, step.step_id, chunkLog, held]);
 
   const pair = step.contrastive_pair_node_id ? graph?.nodes.find((n) => n.id === step.contrastive_pair_node_id) : undefined;
-  const satisfied = chunks.some((c) => c.demand_satisfied);
+  const canFinish = !done && !busySubmit && (chunks.length > 0 || text.trim().length > 0) && isChipValue(confidence);
 
   const finalSubmit = (): void => {
+    if (!canFinish) return;
     const all = [...chunks.map((c) => c.text), text.trim()].filter(Boolean);
     void submitStep({
       raw_prediction_locked: chunks[0]?.text ?? text.trim(),
       verification_thinking: all.join('\n\n'),
     });
   };
+  usePrimaryAction(finalSubmit, canFinish);
 
   return (
-    <div className="stream-card practice">
-      <StepHeader step={step} />
-      <div className="prompt cue-demand">
-        <MathText text={step.prompt_latex} />
+    <article className="card practice">
+      <CardHead step={step} />
+      <div className="prompt">
+        <MathText text={cleanPrompt(step.prompt_latex)} />
       </div>
       {pair ? (
-        <div className="contrast-note">
-          <span className="tag amber mono">⊥ CONTRASTIVE PAIR</span> Discriminate against{' '}
-          <button className="link" onClick={() => focus(pair.id)}>
-            {pair.title}
-          </button>{' '}
-          — state the condition that separates them.
-        </div>
+        <p className="aside-note">
+          Compare it with <b>{pair.title}</b>, and say what separates the two.
+        </p>
       ) : null}
       <StepMedia step={step} sessionId={sessionId} />
 
-      <div className="chunk-stream">
-        {chunks.length === 0 ? (
-          <div className="dim small">
-            Think out loud in small chunks. Each Shift+Enter is evaluated by the Bug-Library Diagnostician and Symbolic Verifier.
-          </div>
-        ) : null}
-        {chunks.map((c) => (
-          <ChunkCard key={c.chunk_index} c={c} />
-        ))}
-        {busyChunk ? (
-          <div className="chunk pending">
-            <Spinner /> evaluating chunk…
-          </div>
-        ) : null}
-      </div>
+      {chunks.length || busyChunk ? (
+        <ol className="thread" aria-label="Your thinking so far">
+          {chunks.map((c) => (
+            <ThreadItem key={c.chunk_index} c={c} />
+          ))}
+          {busyChunk ? (
+            <li className="thread-item pending">
+              <Spin /> Reading your thinking…
+            </li>
+          ) : null}
+        </ol>
+      ) : null}
 
-      <HintLadder step={step} />
+      <Hints step={step} />
 
-      <TelemetryInputDock
-        label={`Thinking chunk ${chunks.length + 1}`}
-        placeholder="Next chunk of raw thinking — what cue do you recognise, which move does it trigger? (Shift+Enter to submit chunk)"
-        onShiftEnter={() => void submitChunk()}
-        shiftEnterLabel="submit chunk"
-        actions={[
-          { label: 'Submit chunk', kind: 'ghost', onClick: () => void submitChunk(), disabled: !text.trim(), busy: busyChunk },
-          {
-            label: satisfied ? 'Submit final answer ✓' : 'Submit final answer',
-            onClick: finalSubmit,
-            disabled: chunks.length === 0 && !text.trim(),
-            busy: busySubmit,
-            title: 'POST /submit with every chunk as verification thinking',
-          },
-        ]}
-      />
-    </div>
+      {!done ? (
+        <>
+          <MathField
+            label="Think out loud"
+            placeholder="Write one step of your thinking at a time."
+            value={text}
+            onChange={(v) => setDraft({ text: v })}
+            micTarget="dock"
+            rows={3}
+            autoFocus
+            onShiftEnter={() => void submitChunk()}
+            hint="Shift+Enter sends this part. Feedback appears under it."
+          />
+          <div className="row">
+            <button className="btn-secondary" disabled={!text.trim() || busyChunk} onClick={() => void submitChunk()}>
+              Send this part
+            </button>
+            <HintButton step={step} />
+          </div>
+        </>
+      ) : null}
+
+      <ConfidenceChips value={confidence} onChange={(v) => setDraft({ confidence: v })} disabled={done} label="How sure are you of your answer?" />
+      {!done ? (
+        <div className="actions">
+          <PrimaryButton onClick={finalSubmit} disabled={!canFinish} busy={busySubmit} busyLabel="Checking…">
+            I’m done
+          </PrimaryButton>
+          {!isChipValue(confidence) && (chunks.length > 0 || text.trim()) ? <span className="muted small">Say how sure you are first.</span> : null}
+        </div>
+      ) : null}
+
+      {held ? <ResultBlock held={held} /> : null}
+
+      <Details>
+        <StepDetails step={step} held={held} extra={<ChunkDetails chunks={chunks} />} />
+      </Details>
+    </article>
   );
 }

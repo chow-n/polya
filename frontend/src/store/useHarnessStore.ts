@@ -36,6 +36,7 @@ import {
   type SettingsOut,
   type SettingsUpdate,
   type StatsOut,
+  type StepPayload,
   type StepResult,
   type StepSubmission,
   type SubagentRunRequest,
@@ -126,7 +127,8 @@ export const api = {
 };
 
 // =================================================================== state types
-export type TabId = 1 | 2 | 3 | 4;
+/** 1 Learn · 2 Review · 3 Map */
+export type TabId = 1 | 2 | 3;
 export type MicTarget = 'dock' | 'raw' | 'reading';
 export type ColorMode = 'domain' | 'mastery' | 'fsrs' | 'hypercorrection';
 export type WsStatus = 'connecting' | 'open' | 'closed';
@@ -172,6 +174,15 @@ export interface LastResult {
   result: StepResult;
 }
 
+/** The step the learner just answered, kept on screen with its inline result until they press Continue. */
+export interface HeldResult {
+  sessionId: string;
+  step: StepPayload;
+  draft: Drafts;
+  chunks: ChunkEvaluation[];
+  result: StepResult;
+}
+
 type BusyKey = 'create' | 'submit' | 'advance' | 'hint' | 'chunk' | 'duel' | 'session' | 'settings' | 'scratch' | 'dispatch';
 
 const blankDrafts = (stepId: string | null): Drafts => ({
@@ -193,8 +204,8 @@ const idleAgents = (): Record<AgentName, SubagentStatus> =>
     ALL_AGENTS.map((a) => [a, { agent_name: a, state: 'IDLE', message: 'idle', artifact_id: null, session_id: null }]),
   ) as Record<AgentName, SubagentStatus>;
 
-const LS_SESSION = 'learnharness.activeSession';
-const LS_UI = 'learnharness.ui';
+const LS_SESSION = 'polya.activeSession';
+const LS_UI = 'polya.ui';
 
 function lsGet(key: string): string | null {
   try {
@@ -223,7 +234,9 @@ const uiPrefs: UiPrefs = (() => {
   const raw = lsGet(LS_UI);
   if (!raw) return d;
   try {
-    return { ...d, ...(JSON.parse(raw) as Partial<UiPrefs>) };
+    const p = { ...d, ...(JSON.parse(raw) as Partial<UiPrefs>) };
+    if (p.tab !== 1 && p.tab !== 2 && p.tab !== 3) p.tab = 1;
+    return p;
   } catch {
     return d;
   }
@@ -255,6 +268,11 @@ export interface HarnessState {
   activeSessionId: string | null;
   sessionState: SessionState | null;
   lastResult: LastResult | null;
+  /** Focus view (one step card at a time) is open. */
+  focusOpen: boolean;
+  /** Goal text of a session being created (shown in the skeleton while the engine prepares it). */
+  creatingGoal: string | null;
+  held: HeldResult | null;
   chunkLog: { stepId: string; items: ChunkEvaluation[] };
   duelLog: { stepId: string; turns: DuelTurn[]; reply: DuelReply | null };
   busy: Partial<Record<BusyKey, boolean>>;
@@ -299,8 +317,10 @@ export interface HarnessState {
   fetchArtifact: (id: string) => Promise<ArtifactOut | null>;
   openWorkspaceFile: (path: string) => Promise<void>;
 
-  loadSession: (id: string, tab?: TabId) => Promise<void>;
+  loadSession: (id: string, open?: boolean) => Promise<void>;
   clearSession: () => void;
+  exitFocus: () => void;
+  continueFromResult: () => void;
   createSession: (req: CreateSessionRequest) => Promise<SessionState | null>;
   submitStep: (overrides?: Partial<StepSubmission>) => Promise<StepResult | null>;
   advanceStep: () => Promise<void>;
@@ -551,6 +571,9 @@ export const useHarnessStore = create<HarnessState>()((set, get) => {
     activeSessionId: null,
     sessionState: null,
     lastResult: null,
+    focusOpen: false,
+    creatingGoal: null,
+    held: null,
     chunkLog: { stepId: '', items: [] },
     duelLog: { stepId: '', turns: [], reply: null },
     busy: {},
@@ -605,7 +628,7 @@ export const useHarnessStore = create<HarnessState>()((set, get) => {
     },
 
     setTab: (t) => {
-      set({ tab: t });
+      set({ tab: t, focusOpen: false });
       persistUi();
     },
     toast: (kind, text) => {
@@ -630,7 +653,7 @@ export const useHarnessStore = create<HarnessState>()((set, get) => {
     selectEdge: (id) => set({ selectedEdgeId: id, selectedNodeId: null }),
     focusNodeInGraph: (id) => {
       get().selectNode(id);
-      get().setTab(2);
+      get().setTab(3);
     },
     setLauncherPreset: (p) => set({ launcherPreset: { ...p, nonce: Date.now() } }),
 
@@ -705,26 +728,30 @@ export const useHarnessStore = create<HarnessState>()((set, get) => {
     },
 
     // ------------------------------------------------------------- sessions & steps
-    loadSession: async (id, tab) => {
+    loadSession: async (id, open = true) => {
       const st = await guard(() => api.session(id), 'Load session', 'session');
       if (st) {
+        if (get().held?.sessionId !== st.session.id) set({ held: null });
         applySession(st);
-        if (tab) get().setTab(tab);
+        if (open) set({ focusOpen: true });
       }
     },
     clearSession: () => {
-      set({ activeSessionId: null, sessionState: null, draft: blankDrafts(null) });
+      set({ activeSessionId: null, sessionState: null, draft: blankDrafts(null), held: null, focusOpen: false });
       lsSet(LS_SESSION, null);
     },
+    exitFocus: () => set({ focusOpen: false, held: null }),
+    continueFromResult: () => set({ held: null }),
     createSession: async (req) => {
+      const wasOpen = get().focusOpen;
+      set({ focusOpen: true, creatingGoal: req.target_goal, held: null });
       const st = await guard(() => api.createSession(req), 'Create session', 'create');
+      set({ creatingGoal: null });
       if (st) {
         applySession(st);
-        set({ lastResult: null });
-        get().setTab(req.mode === 'PRACTICE' || req.mode === 'REFEREE_DUEL' ? 3 : 1);
-        get().toast('success', `Session started: ${st.session.title}`);
+        set({ lastResult: null, focusOpen: true });
         scheduleRefresh('sessions');
-      }
+      } else set({ focusOpen: wasOpen });
       return st;
     },
     submitStep: async (overrides) => {
@@ -752,14 +779,15 @@ export const useHarnessStore = create<HarnessState>()((set, get) => {
       const sid = st.session.id;
       const res = await guard(() => api.submit(sid, body), 'Submit step', 'submit');
       if (res) {
-        set({ lastResult: { sessionId: sid, result: res } });
+        // Keep the answered card on screen with its inline result (graded kinds, or when a counterexample was found).
+        const kind = st.active_step.kind;
+        const graded = kind !== 'PREDICT' && kind !== 'READING';
+        const chunks = s.chunkLog.stepId === st.active_step.step_id ? s.chunkLog.items : [];
+        const held: HeldResult | null =
+          graded || res.created_nodes.length > 0 ? { sessionId: sid, step: st.active_step, draft: d, chunks, result: res } : null;
+        set({ lastResult: { sessionId: sid, result: res }, held });
         applySession(res.state);
         scheduleRefresh('graph', 'stats', 'due', 'queue', 'sessions', 'node');
-        const o = res.trace.outcome;
-        get().toast(
-          o === 'SOLVED_CLEAN' || o === 'SOLVED_WITH_HINTS' || o === 'EXPLORATION_LOGGED' ? 'success' : 'info',
-          `${o.replace(/_/g, ' ')} · quality ${res.trace.trace_quality_score.toFixed(2)} · Δ ${res.delta_before.toFixed(1)}→${res.delta_after.toFixed(1)}`,
-        );
       }
       return res;
     },
@@ -881,7 +909,7 @@ export const useHarnessStore = create<HarnessState>()((set, get) => {
       if (st) {
         set({ settings: st, llmEngine: st.active_engine });
         prosodyEngine.deepgramHint = st.deepgram_available || st.native_dictation_available;
-        get().toast('success', `LLM engine: ${st.active_engine}`);
+        get().toast('success', 'Settings saved');
         scheduleRefresh('stats');
       }
       return st;
@@ -893,7 +921,7 @@ export const useHarnessStore = create<HarnessState>()((set, get) => {
       const d = get().draft;
       if (d.rawLockedAtMs !== null) return true;
       if (d.rawPrediction.trim().length < 15) {
-        get().toast('info', `Raw prediction needs ≥15 characters (${d.rawPrediction.trim().length}/15).`);
+        get().toast('info', 'Write a little more first: one sentence is enough.');
         return false;
       }
       get().setDraft({ rawLockedAtMs: Date.now() });

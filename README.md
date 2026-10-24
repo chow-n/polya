@@ -1,117 +1,105 @@
-# LearnHarness
+# Pólya
 
-A local-first learning harness that treats what you know as **hidden state**. It watches how you reason, not just whether you're right, and chooses the next step to make you think hard at the right moment.
+**Guess first. Check yourself. Review right before you forget.**
 
-It models learning as a partially observable Markov decision process (POMDP). Ideas are nodes in a hypergraph, and "A and B imply C" is a hyperedge. Every answer you give is evidence about your hidden knowledge, and the next step is chosen from the updated beliefs.
+Pólya is a local-first learning companion for mathematics and machine-learning theory. It's named after George Pólya, whose *How to Solve It* taught a generation to guess, try the simple case, and look back. You tell it what you want to understand; it works out what you already know, teaches the gaps one small step at a time, and brings ideas back just before you'd forget them.
 
-![Epistemic lock](docs/screenshots/epistemic-lock.png)
+![Home](docs/screenshots/home-light.png)
 
-## What a session looks like
+## How to use it
 
-1. **Probe.** It asks about the prerequisite whose answer tells it the most. Mastering an idea is evidence you know what it's built from; failing it is evidence that what's built on it is out of reach. That lets it skip what you already know.
-2. **Predict before you see options.** Multiple-choice options stay locked until you write your own prediction (at least 15 characters).
-3. **Read, then check.** Explanations are short (under 180 words) and start from a concrete base case. You can highlight any sentence or equation and attach a "thinking while reading" note. Then a transfer check uses disguised notation.
-4. **Practice and duels.** Cue-demand problems never name the theorem. A five-rung Socratic hint ladder runs from a shape check to a worked analog. In a Proof-Referee duel you find the one flawed step in a proof. In a Feynman duel you convince a simulated student who holds a misconception.
+1. **Learn.** Type what you want to understand ("Why does attention divide by √d_k?") and press **Start**.
+2. **Guess before you see the answers.** Each question asks for your own guess first. Press **Lock in guess** and the options appear. Pick one, say how sure you are, and **Check**.
+3. **Read, then check yourself.** Explanations are short and start from the simplest case. Select any sentence to add a thought.
+4. **Review.** Open **Review** and press **Start review**. Pólya picks the ideas you're about to forget and mixes topics together. **Challenge me** has two harder exercises: find the flaw in a proof, or explain an idea to a confused student.
+5. **Map.** See everything you've learned as a graph of ideas and what they're built from. Click any idea to practise it.
 
-Behind every answer:
+That's it. Everything else happens underneath; the **Details** link on each card shows why that step was chosen and how your answer was scored. **Settings → Advanced** turns on the full research dashboard.
 
-- **It grades the reasoning as well as the answer.** It reads three channels: the locked prediction, notes taken while reading, and post-answer reasoning, plus voice prosody (latency, pauses, hedge words). A right answer reached by guessing earns little mastery credit. A wrong answer caused by unfamiliar notation is penalised less than a structural misconception.
-- **Misconceptions become part of the graph.** Recurring misconceptions are saved as `BUGGY_RULE` nodes. Over-general claims ("always", "for every…") get a counterexample, checked with SymPy, attached as a node.
-- **Pace adapts.** The step size Δ grows after clean, confident solves. A failure or a confident error drops it to the smallest step and inserts a remedial prerequisite step before trying again.
-- **Review timing.** A memory model tracks how well you'd recall each node right now. Practice targets the point just before forgetting, and topics are interleaved across domains.
-
-| Hypergraph (Y-axis locked to logical depth) | Interleaved practice queue |
+| Question card | Map |
 |---|---|
-| ![Hypergraph](docs/screenshots/hypergraph.png) | ![Practice](docs/screenshots/practice-arena.png) |
+| ![Question](docs/screenshots/question-dark.png) | ![Map](docs/screenshots/map-light.png) |
 
-## The science, and its limits
+## Install
+
+**Mac app** (macOS 13+, Apple silicon). You need [uv](https://docs.astral.sh/uv/) and Node 18+ to build it:
+
+```bash
+git clone https://github.com/chow-n/polya && cd polya
+make bundle        # builds the self-contained Pólya.app (about 100 MB) into /Applications
+open -a Pólya
+```
+
+**In a browser** (macOS or Linux):
+
+```bash
+make install && ./start.sh      # http://localhost:5173
+```
+
+Your data lives in `~/Polya/`: `harness.db` plus `workspace/` holding notes, problem sets and `scratch.tex`. That folder is shared by the app, `./start.sh` and the `./polya` command-line tool:
+
+```bash
+./polya status     # what you know, what's fading, how well calibrated you are
+./polya due        # what to review next
+./polya graph      # your ideas by depth
+./polya scratch    # print / edit / watch workspace/scratch.tex (saves stream into the app live)
+```
+
+### AI engine (optional)
+Pólya works with no API key at all:
+
+1. With a key (set in Settings or the environment: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` or `OPENROUTER_API_KEY`), questions and feedback are generated for any topic.
+2. Without a key, it uses your local `claude` CLI if installed. Expect 10–40 s per step.
+3. Otherwise a built-in engine uses hand-written content for the 20 starter topics, plus SymPy for checking math.
+
+Voice: inside the Mac app, dictation runs on-device with Apple's speech recognizer. In a browser, it uses the browser's speech recognition, or Deepgram if `DEEPGRAM_API_KEY` is set.
+
+## Why it works, and the limits
 
 Each mechanism is based on a well-replicated finding:
 
-| Mechanism | Finding |
+| What Pólya does | Why |
 |---|---|
-| Predict before options; probe before teaching | Pretesting effect: Kornell, Hays & Bjork (2009); Richland, Kornell & Kao (2009) |
-| Spaced reviews in the 0.70–0.85 recall window | Desirable difficulties and the new theory of disuse: Bjork & Bjork (1992); FSRS-style memory model |
-| Retrieval practice throughout | Testing effect: Roediger & Karpicke (2006) |
-| Interleaved practice queue | Rohrer & Taylor (2007) |
-| Hypercorrection flag with a stability bonus | Butterfield & Metcalfe (2001) |
-| Productive Failure mode | Kapur (2008) |
-| Calibration badge: Brier score split into reliability − resolution + uncertainty | Murphy (1973) |
-| Mastery estimate (BKT) weighted by reasoning quality | Corbett & Anderson (1994), extended here |
+| Asks for your guess before showing options | Pretesting effect: Kornell, Hays & Bjork (2009); Richland, Kornell & Kao (2009) |
+| Brings ideas back when recall gets hard (R ≈ 0.70–0.85) | Desirable difficulties: Bjork & Bjork (1992); FSRS-style memory model |
+| Tests rather than re-shows | Testing effect: Roediger & Karpicke (2006) |
+| Mixes topics in review | Interleaving: Rohrer & Taylor (2007) |
+| Pays extra attention to confident mistakes | Hypercorrection: Butterfield & Metcalfe (2001) |
+| Can let you struggle before teaching | Productive failure: Kapur (2008) |
+| Tells you whether your confidence is accurate | Calibration, Brier score decomposition: Murphy (1973) |
+| Judges *how* you reasoned, not just the answer | Bayesian knowledge tracing (Corbett & Anderson, 1994), extended with reasoning quality |
 
 **Honest caveats.** This is a research prototype, not a validated tutor.
 
-- The constants for the memory and mastery models (the 0.78 target, the 1.25× hypercorrection bonus, slip and guess rates) are hand-set. Real FSRS fits about 19 parameters to your own history.
-- The probe score is an approximation of expected information gain, not exact mutual information.
-- Without an LLM, reasoning quality is judged by keyword and concept coverage, which can be gamed.
-- Productive failure helps most with conceptual material and can backfire for complete novices.
+- The memory and mastery constants are hand-set rather than fitted to your history.
+- The "most informative question" score is an approximation.
+- Without an AI engine, reasoning quality is judged by concept coverage, which can be gamed.
 - No learner study has been run.
 
-## Quick start
-
-Requirements: macOS or Linux for the web app (the Mac app needs macOS 13+ on Apple silicon), Python 3.11+ (`uv` recommended), Node 18+.
-
-```bash
-git clone https://github.com/chow-n/learn-harness && cd learn-harness
-make install          # backend venv + frontend deps
-./start.sh            # FastAPI :8000 + Vite :5173, waits for health checks
-```
-
-Open http://localhost:5173. Data lives in `~/LearnHarness/` (override with `LEARNHARNESS_HOME`). On first start the database is seeded with 20 nodes across linear algebra, measure-theoretic probability, transformers and reinforcement learning, along with 16 hyperedges, 3 interactive demos and 3 example sessions. If port 5173 is taken, run `LEARNHARNESS_WEB_PORT=5174 ./start.sh`.
-
-```bash
-./harness-cli status   # mastery, Bjork window, calibration decomposition
-./harness-cli due      # due list at 90% desired retention
-./harness-cli graph    # hypergraph by logical depth
-./harness-cli scratch  # print / edit / watch workspace/scratch.tex
-make test              # 34 backend tests (deterministic engine, offline)
-```
-
-`workspace/scratch.tex` is watched live: save it in your editor and it streams into the UI. Notes and problem sets in `workspace/notes` and `workspace/problems` are parsed (`\begin{theorem}`, `\begin{problem}`, …) for retrieval and problem import.
-
-## Mac app
-
-```bash
-make bundle   # self-contained LearnHarness.app (embedded Python, ~100 MB) → /Applications
-make app      # dev variant: repo-backed app (py2app alias) → ~/Applications; code edits show on relaunch
-```
-
-- **One process, one window.** It runs on a random localhost port, so it won't clash with other dev servers. Cold start is about 1.5 s.
-- **Shared data home.** The app, `./start.sh` and `./harness-cli` all use `~/LearnHarness/` (`harness.db` plus `workspace/`). The repo-backed variant copies an existing repo database there on first launch; it copies and never moves.
-- **On-device dictation.** Inside the app, voice dictation uses Apple's speech recognizer with no API key. macOS asks for microphone and speech permission on the first mic use.
-- **Menu.** Open Workspace Folder, Edit scratch.tex in Terminal, Reveal Data Folder, Show App Log, Reload, and Open in Browser.
-- **Signing.** The app is ad-hoc signed for the Mac that built it; it is not notarized. Build it yourself from source.
-
-## LLM engines (all optional)
-
-It works with no API key at all. Resolution order:
-
-1. An API key, set in the environment or in the settings dialog: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` or `OPENROUTER_API_KEY`.
-2. The local `claude` CLI (`claude -p --output-format json`), if installed. Expect 10–40 s per generated step.
-3. A deterministic engine: a hand-written content bank for the seed nodes, template generation for imported nodes, and the SymPy verifier.
-
-Voice dictation uses Deepgram (`DEEPGRAM_API_KEY`, `nova-3`) when a key is set, and otherwise the browser's SpeechRecognition. The prosody meter uses the Web Audio API either way.
-
-## Architecture
+## For developers
 
 ```
-backend/   FastAPI + SQLite (WAL) hypergraph
-  cognitive_math.py   memory model (FSRS-style), BKT, belief propagation, probe selection, Brier/Murphy, Δ-controller
-  agents/             orchestrator (6-mode state machine), 8 sub-agents, prompts, offline content bank
-  tools.py            sandboxed SymPy/NumPy verifier, workspace search, LaTeX parsing, arXiv lookup
-frontend/  React + TypeScript (Vite), hand-written Canvas 2D hypergraph, KaTeX, Web Audio prosody tracker
-workspace/ your scratchpad, notes and problem sets
+backend/   FastAPI + SQLite hypergraph of ideas
+  cognitive_math.py   memory model, knowledge tracing, belief propagation, question selection, calibration, pacing
+  agents/             session state machine, 8 helper agents (math checker, diagnosis, counterexamples, …), offline content
+frontend/  React + TypeScript (Vite), KaTeX, Canvas graph, Web Audio voice/prosody
+macos/     native app launcher (pywebview), py2app (`make app`) and PyInstaller (`make bundle`) builds
 ```
 
-The full design spec is in [`ARCHITECTURE_SPEC.md`](ARCHITECTURE_SPEC.md), the REST/WebSocket contract in [`docs/API.md`](docs/API.md), and decision records in [`docs/specs/`](docs/specs/).
-
-The SymPy verifier runs code in a separate process with blocked imports, no file access and a 5 s timeout. It is a guard rail, not a security boundary: run LearnHarness locally only.
+- `make test` runs the backend suite (deterministic engine, offline); `make build` builds the frontend.
+- Design docs:
+  - [`ARCHITECTURE_SPEC.md`](ARCHITECTURE_SPEC.md) is the original full spec, written under the earlier name LearnHarness.
+  - [`docs/API.md`](docs/API.md) is the REST/WebSocket contract.
+  - [`docs/specs/`](docs/specs/) holds the decision records.
+- Environment variables use the `POLYA_` prefix (`POLYA_HOME`, `POLYA_LLM`, …); the old `LEARNHARNESS_` prefix still works.
+- The SymPy checker runs in a separate process with blocked imports, no file access and a 5 s timeout. It is a guard rail, not a security boundary, so keep Pólya local.
 
 ## Status
 
-- v0.1.0: web app.
-- v0.2.0: native macOS app, repo-backed (`make app`) and self-contained (`make bundle`), with on-device dictation (see [`docs/specs/mac-app/SPEC.md`](docs/specs/mac-app/SPEC.md)).
-- Next: fitting the memory and mastery parameters to your own trace history.
+- v0.1: web app.
+- v0.2: native macOS app.
+- v0.3: renamed Pólya, with a minimalist interface.
+- Next: fitting the memory model to your own review history.
 
 ## License
 

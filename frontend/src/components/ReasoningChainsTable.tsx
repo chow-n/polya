@@ -1,5 +1,6 @@
 /**
- * View 4 — Reasoning Chains & Vault (ARCHITECTURE_SPEC §6.1 tab 4, §1).
+ * Map → List. Simple mode (default): Ideas (grouped by topic, with a memory bar), Connections in plain words, and
+ * Your notes. With Advanced telemetry on, the full instrument tables return:
  *  - filterable hyperedge browser (type / domain / text / mastery) and proposition table
  *  - 5D cue-breadth matrix (nodes × Symbolic/Disguised/Geometric/Computational/Adversarial)
  *  - Bjork Batch launcher (interleaved queue + desirable-difficulty window) and `harness-cli due`-style due list
@@ -7,9 +8,12 @@
  *  - full sub-agent artifact vault
  */
 import { Fragment, useEffect, useMemo, useState } from 'react';
+import { usePrefs } from '../store/prefs';
 import { useHarnessStore } from '../store/useHarnessStore';
 import { ALL_AGENTS, CUE_DIMENSIONS, type AgentName, type EdgeType, type NodeType } from '../types/harness';
 import { MathText } from '../utils/katexRenderer';
+import { EDGE_WORDS } from './HypergraphCanvas';
+import { MemoryBar } from './ReviewScreen';
 import { AGENT_META } from './SidebarSubagentDock';
 import { Bar, C, CUE_LABELS, NODE_TYPE_GLYPH, Spinner, domainColor, dueRelative, fmtDateTime, fx, masteryColor, timeAgo, withAlpha } from './ui';
 
@@ -25,25 +29,102 @@ const SUBS: { id: Sub; label: string }[] = [
 const EDGE_TYPES: EdgeType[] = ['DEDUCTION', 'CONTRASTIVE', 'ISOMORPHISM', 'CUE_TRIGGER'];
 const EDGE_SYM: Record<EdgeType, string> = { DEDUCTION: '⟹', CONTRASTIVE: '⊥', ISOMORPHISM: '≅', CUE_TRIGGER: '⇝' };
 
+const SIMPLE_SUBS: { id: Sub; label: string }[] = [
+  { id: 'props', label: 'Ideas' },
+  { id: 'chains', label: 'Connections' },
+  { id: 'notes', label: 'Your notes' },
+];
+
 export default function ReasoningChainsTable(): JSX.Element {
-  const [sub, setSub] = useState<Sub>('chains');
+  const advanced = usePrefs((s) => s.advanced);
+  const [sub, setSub] = useState<Sub>('props');
+  const subs = advanced ? SUBS : SIMPLE_SUBS;
+  const current = subs.some((x) => x.id === sub) ? sub : 'props';
   return (
-    <div className="vault">
-      <div className="vault-tabs" role="tablist">
-        {SUBS.map((s) => (
-          <button key={s.id} role="tab" aria-selected={sub === s.id} className={`vault-tab${sub === s.id ? ' on' : ''}`} onClick={() => setSub(s.id)}>
+    <div className={`vault${advanced ? ' legacy-skin' : ' simple'}`}>
+      <div className="tabs" role="tablist">
+        {subs.map((s) => (
+          <button key={s.id} role="tab" aria-selected={current === s.id} className={`tab${current === s.id ? ' on' : ''}`} onClick={() => setSub(s.id)}>
             {s.label}
           </button>
         ))}
       </div>
       <div className="vault-body">
-        {sub === 'chains' ? <ChainsPanel /> : null}
-        {sub === 'props' ? <PropsPanel /> : null}
-        {sub === 'cues' ? <CueMatrix /> : null}
-        {sub === 'bjork' ? <BjorkPanel /> : null}
-        {sub === 'notes' ? <NotesPanel /> : null}
-        {sub === 'artifacts' ? <ArtifactVault /> : null}
+        {current === 'chains' ? advanced ? <ChainsPanel /> : <SimpleChains /> : null}
+        {current === 'props' ? advanced ? <PropsPanel /> : <SimpleIdeas /> : null}
+        {current === 'cues' ? <CueMatrix /> : null}
+        {current === 'bjork' ? <BjorkPanel /> : null}
+        {current === 'notes' ? <NotesPanel /> : null}
+        {current === 'artifacts' ? <ArtifactVault /> : null}
       </div>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ simple lists
+function SimpleIdeas(): JSX.Element {
+  const graph = useHarnessStore((s) => s.graph);
+  const selectNode = useHarnessStore((s) => s.selectNode);
+  const [q, setQ] = useState('');
+  const groups = useMemo(() => {
+    const ql = q.trim().toLowerCase();
+    const m = new Map<string, NonNullable<typeof graph>['nodes']>();
+    for (const n of graph?.nodes ?? []) {
+      if (n.node_type === 'BUGGY_RULE') continue;
+      if (ql && !`${n.title} ${n.intuition_summary}`.toLowerCase().includes(ql)) continue;
+      m.set(n.domain_cluster, [...(m.get(n.domain_cluster) ?? []), n]);
+    }
+    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([k, v]) => [k, v.sort((a, b) => a.logical_depth - b.logical_depth || a.title.localeCompare(b.title))] as const);
+  }, [graph, q]);
+  return (
+    <div className="simple-list">
+      <input className="list-filter" type="search" aria-label="Filter ideas" placeholder="Filter ideas" value={q} onChange={(e) => setQ(e.target.value)} />
+      {groups.map(([topic, nodes]) => (
+        <section key={topic} className="block">
+          <h2>{topic}</h2>
+          <ul className="rows">
+            {nodes.map((n) => (
+              <li key={n.id}>
+                <button className="row-btn" onClick={() => selectNode(n.id)}>
+                  <span className="row-title">{n.title}</span>
+                  <MemoryBar r={n.retrievability} />
+                  <span className="row-meta">{n.days_until_due <= 0 ? 'due now' : `review in ${Math.max(1, Math.round(n.days_until_due))} d`}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))}
+      {groups.length === 0 ? <p className="muted">No ideas match.</p> : null}
+    </div>
+  );
+}
+
+function SimpleChains(): JSX.Element {
+  const graph = useHarnessStore((s) => s.graph);
+  const selectEdge = useHarnessStore((s) => s.selectEdge);
+  const [q, setQ] = useState('');
+  const byId = useMemo(() => new Map((graph?.nodes ?? []).map((n) => [n.id, n])), [graph]);
+  const title = (id: string): string => byId.get(id)?.title ?? id;
+  const rows = useMemo(() => {
+    const ql = q.trim().toLowerCase();
+    return (graph?.hyperedges ?? []).filter((e) => !ql || [...e.premise_node_ids, e.conclusion_node_id].map(title).join(' ').toLowerCase().includes(ql));
+  }, [graph, q, byId]);
+  return (
+    <div className="simple-list">
+      <input className="list-filter" type="search" aria-label="Filter connections" placeholder="Filter connections" value={q} onChange={(e) => setQ(e.target.value)} />
+      <ul className="rows">
+        {rows.map((e) => (
+          <li key={e.id}>
+            <button className="row-btn chain-row" onClick={() => selectEdge(e.id)}>
+              <span className="row-title">{e.premise_node_ids.map(title).join(' + ')}</span>
+              <span className="row-verb">{EDGE_WORDS[e.edge_type] === 'Builds on' ? 'leads to' : EDGE_WORDS[e.edge_type].toLowerCase()}</span>
+              <span className="row-title">{title(e.conclusion_node_id)}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      {rows.length === 0 ? <p className="muted">No connections match.</p> : null}
     </div>
   );
 }
@@ -176,7 +257,7 @@ function ChainsPanel(): JSX.Element {
                       className="btn tiny ghost"
                       onClick={() => {
                         selectEdge(e.id);
-                        setTab(2);
+                        setTab(3);
                       }}
                     >
                       graph ▸
@@ -562,6 +643,7 @@ function NotesPanel(): JSX.Element {
   const createSession = useHarnessStore((s) => s.createSession);
   const busy = useHarnessStore((s) => s.busy.dispatch);
   const activeId = useHarnessStore((s) => s.activeSessionId);
+  const advanced = usePrefs((s) => s.advanced);
   const [view, setView] = useState<'blocks' | 'source'>('blocks');
   const [pattern, setPattern] = useState('');
 
@@ -587,8 +669,8 @@ function NotesPanel(): JSX.Element {
     <div className="notes-grid">
       <aside className="file-tree">
         <div className="card-head">
-          <span>workspace/</span>
-          <button className="btn tiny ghost" onClick={() => void refreshFiles()}>
+          <span>Your notes</span>
+          <button className="btn tiny ghost" onClick={() => void refreshFiles()} aria-label="Refresh the file list" title="Refresh">
             ↻
           </button>
         </div>
@@ -605,6 +687,7 @@ function NotesPanel(): JSX.Element {
           </div>
         ))}
         {files.length === 0 ? <div className="dim small pad">No files in workspace/notes or workspace/problems.</div> : null}
+        {advanced ? (
         <div className="rag-box">
           <div className="insp-label">Corpus search (LOCAL_CORPUS_RAG)</div>
           <input className="mono" placeholder="ripgrep pattern" value={pattern} onChange={(e) => setPattern(e.target.value)} />
@@ -612,6 +695,7 @@ function NotesPanel(): JSX.Element {
             {busy ? <Spinner /> : null}grep workspace
           </button>
         </div>
+        ) : null}
       </aside>
       <section className="file-view">
         {openFile ? (
@@ -621,10 +705,10 @@ function NotesPanel(): JSX.Element {
               <span className="spacer" />
               <div className="seg">
                 <button className={`seg-btn${view === 'blocks' ? ' on' : ''}`} onClick={() => setView('blocks')}>
-                  blocks ({openFile.blocks.length})
+                  Sections ({openFile.blocks.length})
                 </button>
                 <button className={`seg-btn${view === 'source' ? ' on' : ''}`} onClick={() => setView('source')}>
-                  source
+                  Source
                 </button>
               </div>
             </div>
@@ -636,7 +720,7 @@ function NotesPanel(): JSX.Element {
                   setTab(1);
                 }}
               >
-                Attach to new session
+                Use for a new session
               </button>
               {openFile.path.startsWith('problems/') ? (
                 <button
@@ -646,12 +730,16 @@ function NotesPanel(): JSX.Element {
                   Practice this problem set
                 </button>
               ) : null}
-              <button className="btn small ghost" disabled={busy} onClick={() => void run('LOCAL_CORPUS_RAG', { filename: openFile.path })}>
-                RAG excerpt
-              </button>
-              <button className="btn small ghost" disabled={busy} onClick={() => void run('ONTOLOGIST_EXTRACTOR', { filename: openFile.path, topic: openFile.path })}>
-                Extract ontology → graph
-              </button>
+              {advanced ? (
+                <>
+                  <button className="btn small ghost" disabled={busy} onClick={() => void run('LOCAL_CORPUS_RAG', { filename: openFile.path })}>
+                    RAG excerpt
+                  </button>
+                  <button className="btn small ghost" disabled={busy} onClick={() => void run('ONTOLOGIST_EXTRACTOR', { filename: openFile.path, topic: openFile.path })}>
+                    Extract ontology → graph
+                  </button>
+                </>
+              ) : null}
             </div>
             <div className="file-content">
               {view === 'source' ? (
@@ -671,7 +759,7 @@ function NotesPanel(): JSX.Element {
             </div>
           </>
         ) : (
-          <div className="dim pad">Select a note or problem file to read its parsed theorem / definition / problem blocks.</div>
+          <div className="dim pad">Pick a file to read it here.</div>
         )}
       </section>
     </div>

@@ -1,27 +1,26 @@
 /**
- * Epistemic Hypergraph Visualizer (ARCHITECTURE_SPEC §6.3) — hand-written HTML5 Canvas 2D renderer, no graph library.
- *
- *  - smooth pan (drag background), zoom (wheel, about the cursor), node dragging, double-click to fit
- *  - hover highlights the upstream (ancestors) / downstream (descendants) Markov blanket over directed edges
- *  - "Lock Y-Axis to Logical Depth": y = H − depth·130 px with spring relaxation along X; OFF → force-directed clusters
- *  - 4 colour modes: Domain Clusters · Bayesian Mastery P(L) · FSRS Retrievability & Bjork Window · Hypercorrection & Buggy Rules
- *  - hyperedge semantics: DEDUCTION (premises → ∧ diamond hub → bold arrow), CONTRASTIVE (dashed amber ⟷ with ⊥),
- *    ISOMORPHISM (glowing violet double line with ≅), CUE_TRIGGER (dotted cyan arrow)
- *  - slide-over inspector: KaTeX statement / intuition / proof sketch, BKT + FSRS stats, next-due (`harness-cli due` style),
- *    5D cue pentagon, premise chains, conclusions, contrastive peers, and the three session-launch actions
+ * Map: hand-written HTML5 Canvas 2D renderer for the idea graph (no graph library).
+ *  - pan (drag), zoom (wheel, about the cursor), node dragging, double-click to fit
+ *  - hover highlights what an idea builds on (upstream) and what builds on it (downstream)
+ *  - colour by Topic · Mastery · Due (plus misconceptions under Advanced); colours come from the theme tokens so the
+ *    canvas reads correctly in light and dark
+ *  - connection kinds: builds on (premises → ∧ hub → arrow), contrasts with (dashed ⊥), same idea (double ≅),
+ *    reminds of (dotted arrow); each can be hidden from the View menu
+ *  - clicking an idea opens a simple panel (statement, intuition, memory, Practice this) with the numbers under Details
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { readCanvasPalette, topicColor, usePrefs, type CanvasPalette } from '../store/prefs';
 import { useHarnessStore, type ColorMode } from '../store/useHarnessStore';
 import type { EdgeType, GraphOut, HyperedgeOut, NodeOut, NodeType } from '../types/harness';
 import { MathText } from '../utils/katexRenderer';
+import { DetailRow, Details, PrimaryButton, useEscape } from './kit';
+import { MemoryBar } from './ReviewScreen';
 import {
   Bar,
   C,
   CUE_LABELS,
   CuePentagon,
-  DOMAIN_COLORS,
   Kv,
-  NODE_TYPE_GLYPH,
   OUTCOME_COLOR,
   Spinner,
   domainColor,
@@ -31,7 +30,6 @@ import {
   masteryColor,
   pct,
   timeAgo,
-  withAlpha,
 } from './ui';
 
 // =================================================================== model
@@ -60,19 +58,41 @@ const NODE_R: Record<NodeType, number> = {
   INTUITION: 15,
   BUGGY_RULE: 14,
 };
-const EDGE_COLOR: Record<EdgeType, string> = {
-  DEDUCTION: C.indigo,
-  CONTRASTIVE: C.amber,
-  ISOMORPHISM: C.violet,
-  CUE_TRIGGER: C.cyan,
+export const EDGE_WORDS: Record<EdgeType, string> = {
+  DEDUCTION: 'Builds on',
+  CONTRASTIVE: 'Contrasts with',
+  ISOMORPHISM: 'Same idea as',
+  CUE_TRIGGER: 'Reminds you of',
 };
-const COLOR_MODES: { id: ColorMode; label: string; title: string }[] = [
-  { id: 'domain', label: '1. Domain Clusters', title: 'Colour by mathematical / CS domain' },
-  { id: 'mastery', label: '2. Bayesian Mastery P(L)', title: 'Rose (<0.35) → Amber (0.55) → Emerald (≥0.85)' },
-  { id: 'fsrs', label: '3. FSRS Retrievability & Bjork Window', title: 'Cyan ring = R∈[0.70,0.85]; slate-emerald = fresh; red pulse = decaying' },
-  { id: 'hypercorrection', label: '4. Hypercorrection & Buggy Rules', title: 'Spotlight high-confidence errors and attached misconceptions' },
-];
-const SLATE_EMERALD = '#3d7a68';
+export const ALL_EDGE_TYPES: EdgeType[] = ['DEDUCTION', 'CONTRASTIVE', 'ISOMORPHISM', 'CUE_TRIGGER'];
+
+function edgeColor(t: EdgeType, pal: CanvasPalette): string {
+  return t === 'DEDUCTION' ? pal.deduction : t === 'CONTRASTIVE' ? pal.contrast : t === 'ISOMORPHISM' ? pal.iso : pal.cue;
+}
+
+function hexRgb(hex: string): [number, number, number] | null {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function mixHex(a: string, b: string, t: number): string {
+  const x = hexRgb(a);
+  const y = hexRgb(b);
+  if (!x || !y) return t < 0.5 ? a : b;
+  const k = Math.max(0, Math.min(1, t));
+  return `#${[0, 1, 2].map((i) => Math.round(x[i] + (y[i] - x[i]) * k).toString(16).padStart(2, '0')).join('')}`;
+}
+function alpha(c: string, a: number): string {
+  const x = hexRgb(c);
+  return x ? `rgba(${x[0]},${x[1]},${x[2]},${a})` : c;
+}
+function masteryMix(pal: CanvasPalette, p: number): string {
+  if (p <= 0.35) return pal.bad;
+  if (p < 0.55) return mixHex(pal.bad, pal.mid, (p - 0.35) / 0.2);
+  if (p < 0.85) return mixHex(pal.mid, pal.good, (p - 0.55) / 0.3);
+  return pal.good;
+}
 
 interface Derived {
   byId: Map<string, NodeOut>;
@@ -320,12 +340,12 @@ function arrowHead(ctx: CanvasRenderingContext2D, x: number, y: number, ang: num
   ctx.restore();
 }
 
-function badge(ctx: CanvasRenderingContext2D, x: number, y: number, text: string, color: string, k: number): void {
+function badge(ctx: CanvasRenderingContext2D, x: number, y: number, text: string, color: string, k: number, fill: string): void {
   const r = 8.5;
   ctx.save();
   ctx.setLineDash([]);
   ctx.shadowBlur = 0;
-  ctx.fillStyle = C.panel;
+  ctx.fillStyle = fill;
   ctx.strokeStyle = color;
   ctx.lineWidth = 1.4;
   ctx.beginPath();
@@ -334,7 +354,7 @@ function badge(ctx: CanvasRenderingContext2D, x: number, y: number, text: string
   ctx.stroke();
   if (k > 0.35) {
     ctx.fillStyle = color;
-    ctx.font = '600 11px "JetBrains Mono", ui-monospace, monospace';
+    ctx.font = '600 11px ui-sans-serif, system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(text, x, y + 0.5);
@@ -360,35 +380,55 @@ function hubPos(e: HyperedgeOut, sim: Map<string, SimNode>): { x: number; y: num
   return { x: mx + (c.x - mx) * 0.6, y: my + (c.y - my) * 0.6 };
 }
 
-function nodeFill(n: NodeOut, mode: ColorMode): string {
+function nodeFill(n: NodeOut, mode: ColorMode, pal: CanvasPalette): string {
   switch (mode) {
     case 'domain':
-      return domainColor(n.domain_cluster, n.node_type);
+      return topicColor(pal, n.domain_cluster, n.node_type === 'BUGGY_RULE');
     case 'mastery':
-      return masteryColor(n.bkt_p_mastery);
+      return masteryMix(pal, n.bkt_p_mastery);
     case 'fsrs':
-      if (n.retrievability > 0.85) return SLATE_EMERALD;
-      if (n.retrievability >= 0.7) return '#0e7490';
-      return '#3b2530';
+      if (n.retrievability > 0.85) return pal.fresh;
+      if (n.retrievability >= 0.7) return pal.window;
+      return pal.decay;
     case 'hypercorrection':
-      if (n.hypercorrection_flag === 1) return C.crimson;
-      if (n.node_type === 'BUGGY_RULE') return C.rose;
-      return '#26324a';
+      if (n.hypercorrection_flag === 1) return pal.bad;
+      if (n.node_type === 'BUGGY_RULE') return pal.topics[7];
+      return mixHex(pal.bg, pal.ink2, 0.35);
   }
 }
 
 // =================================================================== component
-export default function HypergraphCanvas(): JSX.Element {
-  const graph = useHarnessStore((s) => s.graph);
+export default function HypergraphCanvas({
+  edgeTypes,
+  fitSignal,
+  showMistakes,
+}: {
+  edgeTypes: Set<EdgeType>;
+  fitSignal: number;
+  showMistakes: boolean;
+}): JSX.Element {
+  const fullGraph = useHarnessStore((s) => s.graph);
   const colorMode = useHarnessStore((s) => s.colorMode);
-  const setColorMode = useHarnessStore((s) => s.setColorMode);
+  // Recorded misconceptions ("common mistakes") are hidden unless asked for: the map stays about the ideas.
+  const graph = useMemo((): GraphOut | null => {
+    if (!fullGraph || showMistakes || colorMode === 'hypercorrection') return fullGraph;
+    const keep = new Set(fullGraph.nodes.filter((n) => n.node_type !== 'BUGGY_RULE').map((n) => n.id));
+    return {
+      nodes: fullGraph.nodes.filter((n) => keep.has(n.id)),
+      hyperedges: fullGraph.hyperedges.filter((e) => keep.has(e.conclusion_node_id) && e.premise_node_ids.every((p) => keep.has(p))),
+    };
+  }, [fullGraph, showMistakes, colorMode]);
   const depthLock = useHarnessStore((s) => s.depthLock);
-  const setDepthLock = useHarnessStore((s) => s.setDepthLock);
   const selectedNodeId = useHarnessStore((s) => s.selectedNodeId);
   const selectedEdgeId = useHarnessStore((s) => s.selectedEdgeId);
   const selectNode = useHarnessStore((s) => s.selectNode);
   const selectEdge = useHarnessStore((s) => s.selectEdge);
-  const refreshGraph = useHarnessStore((s) => s.refreshGraph);
+  const resolvedTheme = usePrefs((s) => s.resolved);
+  const themePref = usePrefs((s) => s.theme);
+  const [pal, setPal] = useState<CanvasPalette>(() => readCanvasPalette());
+  useEffect(() => {
+    setPal(readCanvasPalette());
+  }, [resolvedTheme, themePref]);
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -407,14 +447,13 @@ export default function HypergraphCanvas(): JSX.Element {
   >(null);
   const fittedRef = useRef(false);
   const measuredRef = useRef(false);
-  const [search, setSearch] = useState('');
-  const [legendOpen, setLegendOpen] = useState(true);
+  const [legendOpen, setLegendOpen] = useState(false);
 
   const derived = useMemo(() => (graph ? derive(graph) : null), [graph]);
 
   // live props for the RAF loop
-  const live = useRef({ graph, derived, colorMode, depthLock, selectedNodeId, selectedEdgeId });
-  live.current = { graph, derived, colorMode, depthLock, selectedNodeId, selectedEdgeId };
+  const live = useRef({ graph, derived, colorMode, depthLock, selectedNodeId, selectedEdgeId, pal, edgeTypes });
+  live.current = { graph, derived, colorMode, depthLock, selectedNodeId, selectedEdgeId, pal, edgeTypes };
 
   // ------------------------------------------------------------- camera helpers
   const fit = useCallback((animate = true) => {
@@ -490,6 +529,11 @@ export default function HypergraphCanvas(): JSX.Element {
     return () => window.clearTimeout(t);
   }, [depthLock, fit]);
 
+  // "Fit to screen" from the View menu
+  useEffect(() => {
+    if (fitSignal > 0) fit(true);
+  }, [fitSignal, fit]);
+
   // centre the camera on externally selected nodes (e.g. "open in graph")
   useEffect(() => {
     if (selectedNodeId) centerOn(selectedNodeId);
@@ -525,7 +569,7 @@ export default function HypergraphCanvas(): JSX.Element {
       raf = requestAnimationFrame(draw);
       const canvas = canvasRef.current;
       const ctx = canvas?.getContext('2d');
-      const { graph: g, derived: d, colorMode: mode, depthLock: lock, selectedNodeId: selN, selectedEdgeId: selE } = live.current;
+      const { graph: g, derived: d, colorMode: mode, depthLock: lock, selectedNodeId: selN, selectedEdgeId: selE, pal: P, edgeTypes: shown } = live.current;
       if (!canvas || !ctx || !g || !d) return;
       const sim = simRef.current;
 
@@ -549,47 +593,25 @@ export default function HypergraphCanvas(): JSX.Element {
       const k = cam.k;
       const pulse = 0.5 + 0.5 * Math.sin(t / 260);
 
-      // background + grid
+      // background (+ faint depth guides when arranged by depth)
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.fillStyle = C.bg;
+      ctx.fillStyle = P.bg;
       ctx.fillRect(0, 0, w, h);
-      const toSx = (x: number): number => (x - cam.x) * k + w / 2;
       const toSy = (y: number): number => (y - cam.y) * k + h / 2;
-      const grid = 40 * k;
-      if (grid > 10) {
-        ctx.strokeStyle = 'rgba(30,41,59,0.35)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        const ox = toSx(0) % grid;
-        const oy = toSy(0) % grid;
-        for (let x = ox; x < w; x += grid) {
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, h);
-        }
-        for (let y = oy; y < h; y += grid) {
-          ctx.moveTo(0, y);
-          ctx.lineTo(w, y);
-        }
-        ctx.stroke();
-      }
-      // depth layer guides
       if (lock) {
         const H = d.maxDepth * LAYER;
-        ctx.font = '10px "JetBrains Mono", ui-monospace, monospace';
-        ctx.textBaseline = 'bottom';
+        ctx.strokeStyle = P.rule;
+        ctx.lineWidth = 1;
         for (let dep = 0; dep <= d.maxDepth; dep++) {
           const y = toSy(H - dep * LAYER);
           if (y < -20 || y > h + 20) continue;
-          ctx.strokeStyle = dep === 0 ? 'rgba(99,102,241,0.35)' : 'rgba(51,65,85,0.45)';
-          ctx.setLineDash(dep === 0 ? [] : [3, 6]);
+          ctx.setLineDash(dep === 0 ? [] : [2, 6]);
           ctx.beginPath();
           ctx.moveTo(0, y);
           ctx.lineTo(w, y);
           ctx.stroke();
-          ctx.setLineDash([]);
-          ctx.fillStyle = C.dim;
-          ctx.fillText(dep === 0 ? 'depth 0 · axioms / unconditional truths' : `depth ${dep}`, 10, y - 4);
         }
+        ctx.setLineDash([]);
       }
 
       // world transform
@@ -606,6 +628,7 @@ export default function HypergraphCanvas(): JSX.Element {
 
       // ---- hyperedges
       for (const e of g.hyperedges) {
+        if (!shown.has(e.edge_type)) continue;
         const c = sim.get(e.conclusion_node_id);
         const cn = d.byId.get(e.conclusion_node_id);
         if (!c || !cn) continue;
@@ -617,7 +640,7 @@ export default function HypergraphCanvas(): JSX.Element {
         const touchesHl = !hl || (inHl(e.conclusion_node_id) && prem.some((p) => inHl(p.n.id)));
         const selected = selE === e.id;
         const baseA = hl ? (touchesHl ? 0.95 : 0.07) : mode === 'hypercorrection' ? 0.3 : 0.4 + 0.5 * e.edge_mastery;
-        const color = EDGE_COLOR[e.edge_type];
+        const color = edgeColor(e.edge_type, P);
         ctx.save();
         ctx.globalAlpha = selected ? 1 : baseA;
         ctx.lineCap = 'round';
@@ -644,7 +667,7 @@ export default function HypergraphCanvas(): JSX.Element {
             arrowHead(ctx, ex, ey, ang, 11, color);
             // ∧ conjunction hub
             const hs = 7.5;
-            ctx.fillStyle = C.panel;
+            ctx.fillStyle = P.hub;
             ctx.lineWidth = lw(1.5);
             ctx.beginPath();
             ctx.moveTo(hub.x, hub.y - hs);
@@ -656,7 +679,7 @@ export default function HypergraphCanvas(): JSX.Element {
             ctx.stroke();
             if (k > 0.45) {
               ctx.fillStyle = color;
-              ctx.font = '700 9px "JetBrains Mono", ui-monospace, monospace';
+              ctx.font = '700 9px ui-sans-serif, system-ui, sans-serif';
               ctx.textAlign = 'center';
               ctx.textBaseline = 'middle';
               ctx.fillText('∧', hub.x, hub.y + 0.5);
@@ -694,13 +717,12 @@ export default function HypergraphCanvas(): JSX.Element {
               ctx.stroke();
               arrowHead(ctx, ex, ey, ang, 9, color);
               arrowHead(ctx, sx, sy, ang + Math.PI, 9, color);
-              badge(ctx, mx, my, '⊥', color, k);
+              badge(ctx, mx, my, '⊥', color, k, P.hub);
             } else if (e.edge_type === 'ISOMORPHISM') {
               const off = 2.6;
               const nx = -Math.sin(ang) * off;
               const ny = Math.cos(ang) * off;
-              ctx.shadowColor = C.violet;
-              ctx.shadowBlur = 10;
+              ctx.shadowBlur = 0;
               ctx.lineWidth = lw(selected ? 1.8 : 1.3);
               ctx.setLineDash([]);
               ctx.beginPath();
@@ -710,7 +732,7 @@ export default function HypergraphCanvas(): JSX.Element {
               ctx.lineTo(ex - nx, ey - ny);
               ctx.stroke();
               ctx.shadowBlur = 0;
-              badge(ctx, mx, my, '≅', color, k);
+              badge(ctx, mx, my, '≅', color, k, P.hub);
             } else {
               // CUE_TRIGGER  c ⇝ m
               ctx.lineWidth = lw(selected ? 2.6 : 1.9);
@@ -729,7 +751,7 @@ export default function HypergraphCanvas(): JSX.Element {
       // ---- mode 4: dashed crimson links to attached BUGGY_RULE misconceptions
       if (mode === 'hypercorrection') {
         ctx.save();
-        ctx.strokeStyle = C.crimson;
+        ctx.strokeStyle = P.bad;
         ctx.setLineDash([5, 4]);
         for (const [a, b] of d.buggyLinks) {
           const sa = sim.get(a);
@@ -748,42 +770,41 @@ export default function HypergraphCanvas(): JSX.Element {
       }
 
       // ---- nodes
-      const showLabels = k > 0.5;
+      const showLabels = k > 0.42;
+      // labels keep a readable on-screen size when zoomed out (and get shorter so they don't collide)
+      const labelPx = 11.5 / Math.min(1, Math.max(k, 0.42));
+      const maxChars = k < 0.85 ? 16 : 22;
       for (const n of g.nodes) {
         const s = sim.get(n.id);
         if (!s) continue;
         const r = rOf(n);
         const a = nodeAlpha(n);
-        const fill = nodeFill(n, mode);
+        const fill = nodeFill(n, mode, P);
         ctx.save();
         ctx.globalAlpha = a;
         // halo rings per mode
         if (mode === 'fsrs') {
           if (n.retrievability >= 0.7 && n.retrievability <= 0.85) {
-            ctx.shadowColor = C.cyan;
-            ctx.shadowBlur = 16;
-            ctx.strokeStyle = C.cyan;
-            ctx.lineWidth = lw(2.5);
+            ctx.strokeStyle = P.window;
+            ctx.lineWidth = lw(2);
             shapePath(ctx, n.node_type, s.x, s.y, r + 6);
             ctx.stroke();
             ctx.shadowBlur = 0;
           } else if (n.retrievability < 0.7) {
-            ctx.strokeStyle = withAlpha(C.rose, 0.35 + 0.6 * pulse);
-            ctx.lineWidth = lw(2 + 1.5 * pulse);
-            shapePath(ctx, n.node_type, s.x, s.y, r + 5 + 4 * pulse);
+            ctx.strokeStyle = alpha(P.decay, 0.35 + 0.4 * pulse);
+            ctx.lineWidth = lw(1.5);
+            shapePath(ctx, n.node_type, s.x, s.y, r + 5 + 2 * pulse);
             ctx.stroke();
           }
         } else if (mode === 'hypercorrection' && n.hypercorrection_flag === 1) {
-          ctx.shadowColor = C.crimson;
-          ctx.shadowBlur = 22 + 10 * pulse;
-          ctx.strokeStyle = withAlpha(C.crimson, 0.6 + 0.4 * pulse);
+          ctx.strokeStyle = alpha(P.bad, 0.6 + 0.4 * pulse);
           ctx.lineWidth = lw(2.5);
           shapePath(ctx, n.node_type, s.x, s.y, r + 7);
           ctx.stroke();
           ctx.shadowBlur = 0;
         }
         if (hl && n.id !== hl.id && (hl.anc.has(n.id) || hl.desc.has(n.id))) {
-          ctx.strokeStyle = hl.anc.has(n.id) ? withAlpha(C.cyan, 0.85) : withAlpha(C.amber, 0.85);
+          ctx.strokeStyle = hl.anc.has(n.id) ? alpha(P.accent, 0.85) : alpha(P.contrast, 0.85);
           ctx.lineWidth = lw(1.6);
           ctx.setLineDash([3, 3]);
           shapePath(ctx, n.node_type, s.x, s.y, r + 5);
@@ -792,13 +813,13 @@ export default function HypergraphCanvas(): JSX.Element {
         }
         // body
         shapePath(ctx, n.node_type, s.x, s.y, r);
-        ctx.fillStyle = withAlpha(fill.startsWith('#') ? fill : C.slate, 0.88);
+        ctx.fillStyle = fill;
         ctx.fill();
-        ctx.strokeStyle = n.id === selN ? C.text : withAlpha(C.text, 0.28);
+        ctx.strokeStyle = n.id === selN ? P.ink : P.nodeStroke;
         ctx.lineWidth = lw(n.id === selN ? 2.6 : 1);
         ctx.stroke();
         if (n.node_type === 'COUNTEREXAMPLE') {
-          ctx.strokeStyle = withAlpha(C.text, 0.85);
+          ctx.strokeStyle = P.hub;
           ctx.lineWidth = lw(1.6);
           const q = r * 0.45;
           ctx.beginPath();
@@ -810,7 +831,7 @@ export default function HypergraphCanvas(): JSX.Element {
         }
         // P(L) arc in non-mastery modes
         if (mode !== 'mastery' && mode !== 'hypercorrection') {
-          ctx.strokeStyle = masteryColor(n.bkt_p_mastery);
+          ctx.strokeStyle = masteryMix(P, n.bkt_p_mastery);
           ctx.lineWidth = lw(2);
           ctx.beginPath();
           ctx.arc(s.x, s.y, r + 3.2, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * n.bkt_p_mastery);
@@ -820,15 +841,15 @@ export default function HypergraphCanvas(): JSX.Element {
         const isHover = hoverRef.current?.kind === 'node' && hoverRef.current.id === n.id;
         if (showLabels || isHover || n.id === selN || (hl && inHl(n.id))) {
           const full = isHover || n.id === selN;
-          const label = !full && n.title.length > 22 ? `${n.title.slice(0, 21)}…` : n.title;
-          ctx.font = `${isHover || n.id === selN ? 600 : 500} 11px Inter, system-ui, sans-serif`;
+          const label = !full && n.title.length > maxChars ? `${n.title.slice(0, maxChars - 1)}…` : n.title;
+          ctx.font = `${isHover || n.id === selN ? 600 : 500} ${labelPx.toFixed(1)}px ui-sans-serif, system-ui, -apple-system, sans-serif`;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'top';
           const tw = ctx.measureText(label).width;
           const ly = s.y + r + 7;
-          ctx.fillStyle = 'rgba(7,10,18,0.78)';
-          ctx.fillRect(s.x - tw / 2 - 3, ly - 1, tw + 6, 14);
-          ctx.fillStyle = a < 1 ? C.muted : C.text;
+          ctx.fillStyle = P.labelBg;
+          ctx.fillRect(s.x - tw / 2 - 3, ly - 1, tw + 6, labelPx * 1.3);
+          ctx.fillStyle = a < 1 ? P.ink2 : P.ink;
           ctx.fillText(label, s.x, ly);
         }
         ctx.restore();
@@ -863,6 +884,7 @@ export default function HypergraphCanvas(): JSX.Element {
     if (best) return { kind: 'node', id: best.id };
     const tol = 6 / k;
     for (const e of g.hyperedges) {
+      if (!live.current.edgeTypes.has(e.edge_type)) continue;
       const c = sim.get(e.conclusion_node_id);
       if (!c) continue;
       const hub = e.edge_type === 'DEDUCTION' ? hubPos(e, sim) : null;
@@ -906,13 +928,14 @@ export default function HypergraphCanvas(): JSX.Element {
       const n = d.byId.get(hit.id);
       if (!n) return;
       const hl = hlRef.current;
-      html = `<div class="tip-title">${escape(n.title)}</div><div class="tip-row mono">${n.node_type} · d${n.logical_depth} · ${escape(clusterOf(n))}</div><div class="tip-row mono">P(L) ${n.bkt_p_mastery.toFixed(2)} · R ${n.retrievability.toFixed(2)} · S ${n.fsrs_stability.toFixed(1)}d</div><div class="tip-row mono dim">▲ ${hl?.anc.size ?? 0} upstream · ▼ ${hl?.desc.size ?? 0} downstream</div>`;
+      const mem = n.retrievability >= 0.85 ? 'strong' : n.retrievability >= 0.7 ? 'fading' : 'needs review';
+      html = `<div class="tip-title">${escape(n.title)}</div><div class="tip-row">${escape(clusterOf(n))} · memory ${mem}</div><div class="tip-row dim">builds on ${hl?.anc.size ?? 0} · leads to ${hl?.desc.size ?? 0}</div>`;
     } else {
       const e = g.hyperedges.find((x) => x.id === hit.id);
       if (!e) return;
-      const sym = { DEDUCTION: '⟹', CONTRASTIVE: '⊥', ISOMORPHISM: '≅', CUE_TRIGGER: '⇝' }[e.edge_type];
-      const prem = e.premise_node_ids.map((id) => d.byId.get(id)?.title ?? id).join(' ∧ ');
-      html = `<div class="tip-title">${e.edge_type} ${sym}</div><div class="tip-row">${escape(prem)} ${sym} ${escape(d.byId.get(e.conclusion_node_id)?.title ?? e.conclusion_node_id)}</div><div class="tip-row mono dim">edge mastery ${e.edge_mastery.toFixed(2)}</div>`;
+      const prem = e.premise_node_ids.map((id) => d.byId.get(id)?.title ?? id).join(' + ');
+      const verb = { DEDUCTION: 'leads to', CONTRASTIVE: 'contrasts with', ISOMORPHISM: 'is the same idea as', CUE_TRIGGER: 'reminds you of' }[e.edge_type];
+      html = `<div class="tip-title">${escape(prem)}</div><div class="tip-row">${verb} ${escape(d.byId.get(e.conclusion_node_id)?.title ?? e.conclusion_node_id)}</div>`;
     }
     tip.innerHTML = html;
     tip.style.opacity = '1';
@@ -1003,12 +1026,6 @@ export default function HypergraphCanvas(): JSX.Element {
     return () => c.removeEventListener('wheel', prevent);
   }, []);
 
-  const matches = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q || !graph) return [];
-    return graph.nodes.filter((n) => n.title.toLowerCase().includes(q) || n.id.toLowerCase().includes(q)).slice(0, 8);
-  }, [search, graph]);
-
   const stats = useMemo(() => {
     if (!graph) return null;
     const by: Record<EdgeType, number> = { DEDUCTION: 0, CONTRASTIVE: 0, ISOMORPHISM: 0, CUE_TRIGGER: 0 };
@@ -1020,67 +1037,6 @@ export default function HypergraphCanvas(): JSX.Element {
 
   return (
     <div className="hg">
-      <div className="hg-toolbar">
-        <label className="toggle" title="Pin logical_depth 0 at the bottom; derived propositions rise 130 px per depth level">
-          <input type="checkbox" checked={depthLock} onChange={(e) => setDepthLock(e.target.checked)} />
-          <span className="toggle-track" />
-          <span>Lock Y-Axis to Logical Depth</span>
-        </label>
-        <div className="seg" role="radiogroup" aria-label="Colour mode">
-          {COLOR_MODES.map((m) => (
-            <button
-              key={m.id}
-              role="radio"
-              aria-checked={colorMode === m.id}
-              className={`seg-btn${colorMode === m.id ? ' on' : ''}`}
-              onClick={() => setColorMode(m.id)}
-              title={m.title}
-            >
-              {m.label}
-            </button>
-          ))}
-        </div>
-        <span className="spacer" />
-        <div className="hg-search">
-          <input
-            placeholder="find node…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && matches[0]) {
-                selectNode(matches[0].id);
-                setSearch('');
-              } else if (e.key === 'Escape') setSearch('');
-            }}
-          />
-          {matches.length ? (
-            <div className="hg-search-results">
-              {matches.map((n) => (
-                <button
-                  key={n.id}
-                  onClick={() => {
-                    selectNode(n.id);
-                    setSearch('');
-                  }}
-                >
-                  <span className="dot-inline" style={{ background: domainColor(n.domain_cluster, n.node_type) }} />
-                  {n.title}
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </div>
-        <button className="btn small ghost" onClick={() => fit(true)} title="Fit graph (double-click background)">
-          ⤢ Fit
-        </button>
-        <button className="btn small ghost" onClick={() => void refreshGraph()} title="Reload GET /api/graph">
-          ↻
-        </button>
-        <span className="mono dim small">
-          {graph ? `${graph.nodes.length} nodes · ${graph.hyperedges.length} hyperedges` : 'loading…'}
-        </span>
-      </div>
-
       <div className="hg-stage" ref={wrapRef}>
         <canvas
           ref={canvasRef}
@@ -1102,80 +1058,67 @@ export default function HypergraphCanvas(): JSX.Element {
         <div className="hg-tip" ref={tipRef} />
         {!graph ? (
           <div className="hg-loading">
-            <Spinner /> loading hypergraph…
+            <Spinner /> Loading your map…
           </div>
         ) : null}
 
-        <div className={`hg-legend${legendOpen ? '' : ' closed'}`}>
-          <button className="legend-head" onClick={() => setLegendOpen((v) => !v)}>
-            Legend {legendOpen ? '▾' : '▸'}
+        <div className={`map-legend${legendOpen ? ' open' : ''}`}>
+          <button className="text-btn" aria-expanded={legendOpen} onClick={() => setLegendOpen((v) => !v)}>
+            Legend
           </button>
           {legendOpen ? (
-            <>
-              <div className="legend-sec">
-                <LegendEdge type="DEDUCTION" label="Deduction {A,B} ∧→ C" count={stats?.DEDUCTION} />
-                <LegendEdge type="CONTRASTIVE" label="Contrastive u ⊥ v" count={stats?.CONTRASTIVE} />
-                <LegendEdge type="ISOMORPHISM" label="Isomorphism u ≅ v" count={stats?.ISOMORPHISM} />
-                <LegendEdge type="CUE_TRIGGER" label="Cue trigger c ⇝ m" count={stats?.CUE_TRIGGER} />
-              </div>
-              <div className="legend-sec types mono">
-                {(Object.keys(NODE_TYPE_GLYPH) as NodeType[]).map((t) => (
-                  <span key={t}>
-                    {NODE_TYPE_GLYPH[t]} {t.toLowerCase().replace('_', ' ')}
-                  </span>
-                ))}
-              </div>
-              <div className="legend-sec">
-                {colorMode === 'domain'
-                  ? Object.entries(DOMAIN_COLORS).map(([dname, col]) => (
-                      <div key={dname} className="legend-row">
-                        <span className="dot-inline" style={{ background: col }} />
-                        {dname}
-                      </div>
-                    ))
-                  : null}
-                {colorMode === 'mastery' ? (
-                  <>
-                    <div className="legend-gradient" />
-                    <div className="legend-scale mono">
-                      <span>0.35</span>
-                      <span>0.55</span>
-                      <span>0.85 P(L)</span>
+            <div className="legend-body">
+              {ALL_EDGE_TYPES.map((t) => (
+                <LegendEdge key={t} type={t} pal={pal} count={stats?.[t]} />
+              ))}
+              <div className="legend-sep" />
+              {colorMode === 'domain'
+                ? [...new Set((graph?.nodes ?? []).map((n) => clusterOf(n)))].sort().map((dname) => (
+                    <div key={dname} className="legend-row">
+                      <span className="swatch" style={{ background: topicColor(pal, dname, dname === 'Buggy Rules') }} />
+                      {dname === 'Buggy Rules' ? 'Common mistakes' : dname}
                     </div>
-                  </>
-                ) : null}
-                {colorMode === 'fsrs' ? (
-                  <>
-                    <div className="legend-row">
-                      <span className="ring-inline cyan" /> Bjork window 0.70 ≤ R ≤ 0.85
-                    </div>
-                    <div className="legend-row">
-                      <span className="dot-inline" style={{ background: SLATE_EMERALD }} /> fresh R &gt; 0.85
-                    </div>
-                    <div className="legend-row">
-                      <span className="ring-inline red" /> decaying R &lt; 0.70
-                    </div>
-                  </>
-                ) : null}
-                {colorMode === 'hypercorrection' ? (
-                  <>
-                    <div className="legend-row">
-                      <span className="dot-inline" style={{ background: C.crimson }} /> hypercorrection flag (≥75% error)
-                    </div>
-                    <div className="legend-row">
-                      <span className="dot-inline" style={{ background: C.rose }} /> buggy rule
-                    </div>
-                    <div className="legend-row">
-                      <span className="dash-inline" /> attached misconception
-                    </div>
-                  </>
-                ) : null}
-                {colorMode !== 'mastery' && colorMode !== 'hypercorrection' ? (
-                  <div className="legend-row dim">outer arc = P(L) mastery</div>
-                ) : null}
-              </div>
-              <div className="legend-sec dim small">hover: ▲ upstream (cyan) · ▼ downstream (amber) · wheel zoom · drag pan/move</div>
-            </>
+                  ))
+                : null}
+              {colorMode === 'mastery' ? (
+                <>
+                  <div className="legend-row">
+                    <span className="swatch" style={{ background: pal.bad }} /> just starting
+                  </div>
+                  <div className="legend-row">
+                    <span className="swatch" style={{ background: pal.mid }} /> getting there
+                  </div>
+                  <div className="legend-row">
+                    <span className="swatch" style={{ background: pal.good }} /> know it well
+                  </div>
+                </>
+              ) : null}
+              {colorMode === 'fsrs' ? (
+                <>
+                  <div className="legend-row">
+                    <span className="swatch" style={{ background: pal.fresh }} /> memory strong
+                  </div>
+                  <div className="legend-row">
+                    <span className="swatch" style={{ background: pal.window }} /> fading: a good time to review
+                  </div>
+                  <div className="legend-row">
+                    <span className="swatch" style={{ background: pal.decay }} /> needs review
+                  </div>
+                </>
+              ) : null}
+              {colorMode === 'hypercorrection' ? (
+                <>
+                  <div className="legend-row">
+                    <span className="swatch" style={{ background: pal.bad }} /> confident mistakes
+                  </div>
+                  <div className="legend-row">
+                    <span className="swatch" style={{ background: pal.topics[7] }} /> common mistakes
+                  </div>
+                </>
+              ) : null}
+              {colorMode === 'domain' || colorMode === 'fsrs' ? <div className="legend-row muted">The thin ring around each idea shows how well you know it.</div> : null}
+              <div className="legend-row muted">Drag to move · scroll to zoom · double-click to fit</div>
+            </div>
           ) : null}
         </div>
 
@@ -1192,33 +1135,32 @@ function escape(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c);
 }
 
-function LegendEdge({ type, label, count }: { type: EdgeType; label: string; count?: number }): JSX.Element {
-  const col = EDGE_COLOR[type];
+function LegendEdge({ type, pal, count }: { type: EdgeType; pal: CanvasPalette; count?: number }): JSX.Element {
+  const col = edgeColor(type, pal);
   return (
     <div className="legend-row">
-      <svg width={40} height={12} aria-hidden="true">
+      <svg width={36} height={12} aria-hidden="true">
         {type === 'DEDUCTION' ? (
           <>
-            <line x1={2} y1={6} x2={30} y2={6} stroke={col} strokeWidth={2.4} />
-            <path d="M 18 2 L 22 6 L 18 10 L 14 6 Z" fill={C.panel} stroke={col} />
-            <path d="M 38 6 L 30 2 L 30 10 Z" fill={col} />
+            <line x1={2} y1={6} x2={28} y2={6} stroke={col} strokeWidth={2} />
+            <path d="M 34 6 L 27 2.5 L 27 9.5 Z" fill={col} />
           </>
         ) : type === 'CONTRASTIVE' ? (
-          <line x1={2} y1={6} x2={38} y2={6} stroke={col} strokeWidth={1.6} strokeDasharray="5 4" />
+          <line x1={2} y1={6} x2={34} y2={6} stroke={col} strokeWidth={1.6} strokeDasharray="5 4" />
         ) : type === 'ISOMORPHISM' ? (
           <>
-            <line x1={2} y1={4} x2={38} y2={4} stroke={col} strokeWidth={1.3} />
-            <line x1={2} y1={8} x2={38} y2={8} stroke={col} strokeWidth={1.3} />
+            <line x1={2} y1={4} x2={34} y2={4} stroke={col} strokeWidth={1.3} />
+            <line x1={2} y1={8} x2={34} y2={8} stroke={col} strokeWidth={1.3} />
           </>
         ) : (
           <>
-            <line x1={2} y1={6} x2={30} y2={6} stroke={col} strokeWidth={2} strokeDasharray="0.5 4" strokeLinecap="round" />
-            <path d="M 38 6 L 30 2 L 30 10 Z" fill={col} />
+            <line x1={2} y1={6} x2={28} y2={6} stroke={col} strokeWidth={2} strokeDasharray="0.5 4" strokeLinecap="round" />
+            <path d="M 34 6 L 27 2.5 L 27 9.5 Z" fill={col} />
           </>
         )}
       </svg>
-      <span>{label}</span>
-      <span className="mono dim">{count ?? 0}</span>
+      <span>{EDGE_WORDS[type].toLowerCase()}</span>
+      <span className="muted">{count ?? 0}</span>
     </div>
   );
 }
@@ -1244,6 +1186,7 @@ function NodeInspector({ id }: { id: string }): JSX.Element {
   const loadSession = useHarnessStore((s) => s.loadSession);
   const busy = useHarnessStore((s) => s.busy.create);
   const [proofOpen, setProofOpen] = useState(false);
+  useEscape(() => selectNode(null), true);
   // NodeDetail is fetched by store.selectNode() and refreshed on graph_updated.
 
   const n = detail?.node ?? graphNode;
@@ -1256,19 +1199,48 @@ function NodeInspector({ id }: { id: string }): JSX.Element {
   }
   const sourceSession = n.created_in_session_id ?? detail?.traces[0]?.session_id ?? null;
   const inWindow = n.retrievability >= 0.7 && n.retrievability <= 0.85;
+  const isMistake = n.node_type === 'BUGGY_RULE';
 
   return (
-    <div className="insp-body">
-      <div className="insp-head">
-        <div className="insp-kind mono">
-          <span style={{ color: domainColor(n.domain_cluster, n.node_type) }}>{NODE_TYPE_GLYPH[n.node_type]}</span> {n.node_type} · depth{' '}
-          {n.logical_depth}
-        </div>
-        <button className="btn ghost icon" onClick={() => selectNode(null)} aria-label="Close inspector">
-          ✕
+    <div className="panel-body">
+      <div className="panel-top">
+        <span className="muted small">{isMistake ? 'A common mistake' : n.domain_cluster}</span>
+        <button className="icon-btn" onClick={() => selectNode(null)} aria-label="Close panel" title="Close (Esc)">
+          ×
         </button>
       </div>
-      <h3 className="insp-title">{n.title}</h3>
+      <h2 className="panel-title">{n.title}</h2>
+      <div className="statement">
+        <MathText text={n.statement_latex} latexField />
+      </div>
+      {n.intuition_summary ? (
+        <div className="intuition">
+          <MathText text={n.intuition_summary} />
+        </div>
+      ) : null}
+      {!isMistake ? (
+        <div className="panel-mem">
+          <span className="muted">Memory</span>
+          <MemoryBar r={n.retrievability} />
+          <span className="muted small">
+            {n.days_until_due <= 0 ? 'Due for review now' : n.days_until_due < 1 ? 'Review later today' : `Next review in ${Math.round(n.days_until_due)} days`}
+          </span>
+        </div>
+      ) : null}
+      {!isMistake ? (
+        <div className="actions">
+          <PrimaryButton
+            shortcut={false}
+            busy={busy}
+            busyLabel="Starting…"
+            onClick={() => void createSession({ mode: 'PRACTICE', target_goal: `Practice: ${n.title}`, target_node_id: n.id, cue_level: 1 })}
+          >
+            Practice this
+          </PrimaryButton>
+        </div>
+      ) : null}
+      <Details>
+      <div className="legacy-skin insp-legacy">
       <div className="insp-domain">
         <span className="dot-inline" style={{ background: domainColor(n.domain_cluster, n.node_type) }} />
         {n.domain_cluster}
@@ -1277,13 +1249,6 @@ function NodeInspector({ id }: { id: string }): JSX.Element {
       </div>
 
       <div className="insp-actions">
-        <button
-          className="btn primary"
-          disabled={busy}
-          onClick={() => void createSession({ mode: 'PRACTICE', target_goal: `Practice: ${n.title}`, target_node_id: n.id, cue_level: 1 })}
-        >
-          Practice This Node Now
-        </button>
         <button
           className="btn"
           disabled={busy}
@@ -1297,28 +1262,17 @@ function NodeInspector({ id }: { id: string }): JSX.Element {
             })
           }
         >
-          ⚖ Launch Proof-Referee Duel on This Node
+          Find the flaw in a proof about this
         </button>
         <button
           className="btn ghost"
           disabled={!sourceSession}
           title={sourceSession ? `Open session ${sourceSession}` : 'Seeded node: no session has created or practised it yet'}
-          onClick={() => sourceSession && void loadSession(sourceSession, 1)}
+          onClick={() => sourceSession && void loadSession(sourceSession)}
         >
-          ↗ Jump to Source Session
+          Open the session it came from
         </button>
       </div>
-
-      <section className="insp-sec">
-        <div className="insp-label">Statement</div>
-        <MathText text={n.statement_latex} latexField />
-      </section>
-      {n.intuition_summary ? (
-        <section className="insp-sec">
-          <div className="insp-label">Intuition</div>
-          <MathText text={n.intuition_summary} />
-        </section>
-      ) : null}
       {n.formal_proof_sketch_latex ? (
         <section className="insp-sec">
           <button className="insp-label link" onClick={() => setProofOpen((v) => !v)}>
@@ -1455,7 +1409,7 @@ function NodeInspector({ id }: { id: string }): JSX.Element {
             <div className="insp-label">Recent traces · {detail.traces.length}</div>
             {detail.traces.length === 0 ? <div className="dim small">Never assessed.</div> : null}
             {detail.traces.slice(0, 6).map((t) => (
-              <button key={t.id} className="trace-row mono" onClick={() => void loadSession(t.session_id, 1)} title="Open the session">
+              <button key={t.id} className="trace-row mono" onClick={() => void loadSession(t.session_id)} title="Open the session">
                 <span className="tl-cell" style={{ background: OUTCOME_COLOR[t.outcome] }} />
                 <span>{t.phase}</span>
                 <span style={{ color: OUTCOME_COLOR[t.outcome] }}>{t.outcome}</span>
@@ -1472,59 +1426,61 @@ function NodeInspector({ id }: { id: string }): JSX.Element {
           <Spinner /> loading premise chains…
         </div>
       )}
+      </div>
+      </Details>
     </div>
   );
 }
 
 function EdgeInspector({ edge }: { edge: HyperedgeOut | undefined }): JSX.Element {
   const selectEdge = useHarnessStore((s) => s.selectEdge);
+  const selectNode = useHarnessStore((s) => s.selectNode);
   const loadSession = useHarnessStore((s) => s.loadSession);
   const createSession = useHarnessStore((s) => s.createSession);
-  const conclusion = useHarnessStore((s) => (edge ? s.graph?.nodes.find((n) => n.id === edge.conclusion_node_id) : undefined));
+  const nodes = useHarnessStore((s) => s.graph?.nodes);
   const busy = useHarnessStore((s) => s.busy.create);
-  if (!edge) return <div className="insp-body dim">Hyperedge no longer exists.</div>;
-  const sym = { DEDUCTION: '⟹', CONTRASTIVE: '⊥', ISOMORPHISM: '≅', CUE_TRIGGER: '⇝' }[edge.edge_type];
+  useEscape(() => selectEdge(null), true);
+  if (!edge) return <div className="panel-body muted">This connection no longer exists.</div>;
+  const title = (id: string): string => nodes?.find((n) => n.id === id)?.title ?? id;
+  const conclusion = nodes?.find((n) => n.id === edge.conclusion_node_id);
+  const verb = { DEDUCTION: 'lead to', CONTRASTIVE: 'contrast with', ISOMORPHISM: 'are the same idea as', CUE_TRIGGER: 'remind you of' }[edge.edge_type];
   return (
-    <div className="insp-body">
-      <div className="insp-head">
-        <div className="insp-kind mono" style={{ color: EDGE_COLOR[edge.edge_type] }}>
-          {sym} {edge.edge_type} hyperedge
-        </div>
-        <button className="btn ghost icon" onClick={() => selectEdge(null)} aria-label="Close inspector">
-          ✕
+    <div className="panel-body">
+      <div className="panel-top">
+        <span className="muted small">A connection</span>
+        <button className="icon-btn" onClick={() => selectEdge(null)} aria-label="Close panel" title="Close (Esc)">
+          ×
         </button>
       </div>
-      <div className="chain-prem big">
+      <p className="edge-sentence">
         {edge.premise_node_ids.map((p, i) => (
-          <span key={p} className="row">
-            {i > 0 ? <span className="mono dim"> ∧ </span> : null}
-            <NodeChip id={p} />
+          <span key={p}>
+            {i > 0 ? (i === edge.premise_node_ids.length - 1 ? ' and ' : ', ') : null}
+            <button className="linkish" onClick={() => selectNode(p)}>
+              {title(p)}
+            </button>
           </span>
-        ))}
-        <span className="mono" style={{ color: EDGE_COLOR[edge.edge_type] }}>
-          {' '}
-          {sym}{' '}
-        </span>
-        <NodeChip id={edge.conclusion_node_id} />
-      </div>
-      <section className="insp-sec">
-        <div className="insp-label">{edge.edge_type === 'CONTRASTIVE' ? 'Boundary discriminator' : 'Reasoning chain'}</div>
-        <MathText text={edge.reasoning_chain_latex} latexField />
-      </section>
-      {edge.discriminating_condition_latex ? (
-        <section className="insp-sec">
-          <div className="insp-label">Discriminating condition</div>
-          <MathText text={edge.discriminating_condition_latex} latexField />
-        </section>
+        ))}{' '}
+        {edge.premise_node_ids.length === 1 ? verb.replace(/^lead/, 'leads').replace(/^are/, 'is').replace(/^contrast /, 'contrasts ').replace(/^remind /, 'reminds ') : verb}{' '}
+        <button className="linkish" onClick={() => selectNode(edge.conclusion_node_id)}>
+          {title(edge.conclusion_node_id)}
+        </button>
+        .
+      </p>
+      {edge.reasoning_chain_latex ? (
+        <div className="statement">
+          <MathText text={edge.reasoning_chain_latex} latexField />
+        </div>
       ) : null}
-      <section className="insp-sec">
-        <Kv k="Edge mastery" v={<>{fx(edge.edge_mastery)} <Bar value={edge.edge_mastery} /></>} />
-        <Kv k="Created" v={fmtDateTime(edge.created_at)} />
-        <Kv k="id" v={edge.id} />
-      </section>
-      <div className="insp-actions">
-        <button
-          className="btn primary"
+      {edge.discriminating_condition_latex ? (
+        <div className="intuition">
+          <p className="muted small">What tells them apart</p>
+          <MathText text={edge.discriminating_condition_latex} latexField />
+        </div>
+      ) : null}
+      <div className="actions">
+        <PrimaryButton
+          shortcut={false}
           disabled={busy || !conclusion}
           onClick={() =>
             conclusion &&
@@ -1537,12 +1493,20 @@ function EdgeInspector({ edge }: { edge: HyperedgeOut | undefined }): JSX.Elemen
             })
           }
         >
-          Practice this link
-        </button>
-        <button className="btn ghost" disabled={!edge.session_id} onClick={() => edge.session_id && void loadSession(edge.session_id, 1)}>
-          ↗ Jump to Source Session
-        </button>
+          Practice this
+        </PrimaryButton>
       </div>
+      <Details>
+        <DetailRow k="Kind">{edge.edge_type}</DetailRow>
+        <DetailRow k="Edge mastery">{fx(edge.edge_mastery)}</DetailRow>
+        <DetailRow k="Created">{fmtDateTime(edge.created_at)}</DetailRow>
+        <DetailRow k="id">{edge.id}</DetailRow>
+        {edge.session_id ? (
+          <button className="text-btn" onClick={() => edge.session_id && void loadSession(edge.session_id)}>
+            Open the session it came from
+          </button>
+        ) : null}
+      </Details>
     </div>
   );
 }

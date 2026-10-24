@@ -42,10 +42,13 @@ export default function SandboxDemoViewer({
   artifact,
   sessionId,
   height = 460,
+  minimal = false,
 }: {
   artifact: ArtifactOut;
   sessionId?: string | null;
   height?: number;
+  /** Pólya cards: just the demo with a caption; telemetry is still captured and posted. */
+  minimal?: boolean;
 }): JSX.Element {
   const postDemoTelemetry = useHarnessStore((s) => s.postDemoTelemetry);
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -105,6 +108,34 @@ export default function SandboxDemoViewer({
   }, [artifact.id, artifact.session_id, sessionId, postDemoTelemetry]);
 
   const params = last?.params ? Object.entries(last.params) : [];
+
+  if (minimal) {
+    return (
+      <figure className="demo-min">
+        <div className="demo-min-frame" style={{ height }}>
+          <iframe
+            key={reloadKey}
+            ref={iframeRef}
+            title={artifact.title}
+            sandbox="allow-scripts"
+            srcDoc={srcDoc}
+            style={{ filter: inverted ? 'invert(1) hue-rotate(180deg)' : 'none' }}
+          />
+        </div>
+        <figcaption>
+          <span>{last?.challengeSolved ? '✓ Challenge solved. ' : ''}Try the sliders: Pólya notices what you explore.</span>
+          <span className="demo-min-tools">
+            <button className="icon-btn" onClick={() => setInverted((v) => !v)} aria-pressed={inverted} aria-label="Invert colours" title="Invert colours">
+              ◐
+            </button>
+            <button className="icon-btn" onClick={() => setReloadKey((k) => k + 1)} aria-label="Reload demo" title="Reload demo">
+              ↻
+            </button>
+          </span>
+        </figcaption>
+      </figure>
+    );
+  }
 
   return (
     <div className="demo">

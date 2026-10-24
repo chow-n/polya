@@ -1,283 +1,196 @@
 /**
- * Two-Stage Epistemic Lock (ARCHITECTURE_SPEC §6.2, Law 3; pretesting effect per SPEC.md).
- * Handles PROBE / PREDICT / CHECK (lock flow) and PRODUCTIVE_FAILURE (open exploration, no options).
- *  Stage 1: raw stream-of-consciousness prediction (≥15 chars, typed or dictated) → "Lock In Raw Prediction (Cmd+Enter)"
- *  Stage 2: options unblur (or the direct symbolic-verification prompt appears); confidence + verification → submit.
+ * Question card: PROBE / PREDICT / CHECK (guess first, then choose) and PRODUCTIVE_FAILURE (try first, no options).
+ *  1. "Your guess, in your own words" (≥15 characters, typed or dictated) → Lock in guess
+ *  2. the answer options fade in (their space is reserved, so nothing below moves) → pick one → confidence chip → Check
+ *  3. the result appears inline → Continue
+ * The submission payload is unchanged: the store builds it from the draft exactly as before.
  */
-import { useEffect, useMemo, useState } from 'react';
-import { useHarnessStore } from '../store/useHarnessStore';
-import type { EIGRow, StepPayload } from '../types/harness';
+import { useMemo, useState } from 'react';
+import { useHarnessStore, type HeldResult } from '../store/useHarnessStore';
+import type { StepPayload } from '../types/harness';
 import { MathText } from '../utils/katexRenderer';
-import TelemetryInputDock from './TelemetryInputDock';
-import { Bar, C, fmtDateTime, fx } from './ui';
+import { ConfidenceChips, Details, MathField, PrimaryButton, correctFromFeedback, isChipValue, usePrimaryAction } from './kit';
+import { CardHead, ResultBlock, StepDetails, cleanPrompt } from './stepParts';
 
 const MIN_RAW = 15;
 
-export const KIND_LABEL: Record<string, string> = {
-  PROBE: 'Diagnostic Probe',
-  PRODUCTIVE_FAILURE: 'Productive Failure',
-  PREDICT: 'Predict',
-  CHECK: 'Check',
-  READING: 'Reading',
-  PRACTICE_CHUNK: 'Cue-Demand Practice',
-  REFEREE: 'Proof Referee',
-  FEYNMAN: 'Feynman Duel',
-  COMPLETE: 'Complete',
-};
-
-export function StepHeader({ step }: { step: StepPayload }): JSX.Element {
-  const graph = useHarnessStore((s) => s.graph);
-  const focus = useHarnessStore((s) => s.focusNodeInGraph);
-  const titles = step.target_node_ids.map((id) => ({ id, title: graph?.nodes.find((n) => n.id === id)?.title ?? id }));
-  return (
-    <div className="step-head">
-      <div className="step-head-row">
-        <span className={`kind-badge k-${step.kind.toLowerCase()}`}>{KIND_LABEL[step.kind] ?? step.kind}</span>
-        <span className="mono dim">step {step.step_index + 1}</span>
-        <span className="mono dim" title="Cue obfuscation level: 1 canonical · 2 disguised · 3 synthesis/contrast · 4 violated premise">
-          cue L{step.cue_level}
-        </span>
-        <span className="mono dim" title="Step velocity Δ (reasoning leap size)">
-          Δ {step.delta.toFixed(1)}
-        </span>
-        <span className="spacer" />
-        <span className="mono dim small" title="Engine that generated this step">
-          {step.generated_by}
-        </span>
-      </div>
-      {step.title ? <h2 className="step-title">{step.title}</h2> : null}
-      {titles.length ? (
-        <div className="target-chips">
-          {titles.map((t) => (
-            <button key={t.id} className="chip" onClick={() => focus(t.id)} title="Open in hypergraph inspector">
-              ◎ {t.title}
-            </button>
-          ))}
-        </div>
-      ) : null}
-      {step.rationale ? (
-        <div className="rationale">
-          <span className="rationale-k mono">why this step</span> <MathText text={step.rationale} inline />
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function EigTable({ rows, chosen }: { rows: EIGRow[]; chosen: string | undefined }): JSX.Element {
-  const [open, setOpen] = useState(true);
-  const max = Math.max(1e-9, ...rows.map((r) => r.eig));
-  const sorted = [...rows].sort((a, b) => b.eig - a.eig);
-  return (
-    <div className="eig">
-      <button className="eig-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-        <span>Why this probe? Expected-information-gain ranking</span>
-        <span className="mono dim">
-          EIG = H(v)·(1 + 0.4·P·|anc| + 0.4·(1−P)·|desc|) {open ? '▾' : '▸'}
-        </span>
-      </button>
-      {open ? (
-        <table className="tbl compact">
-          <thead>
-            <tr>
-              <th>node</th>
-              <th className="num">P(L)</th>
-              <th className="num">H(v)</th>
-              <th className="num">anc</th>
-              <th className="num">desc</th>
-              <th className="num">EIG</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.map((r) => (
-              <tr key={r.node_id} className={r.node_id === chosen ? 'chosen' : ''}>
-                <td className="truncate" title={r.node_id}>
-                  {r.node_id === chosen ? '▸ ' : ''}
-                  {r.title}
-                </td>
-                <td className="num mono">{fx(r.p_mastery)}</td>
-                <td className="num mono">{fx(r.entropy, 3)}</td>
-                <td className="num mono">{r.unprobed_ancestors}</td>
-                <td className="num mono">{r.unprobed_descendants}</td>
-                <td className="num mono">{fx(r.eig, 3)}</td>
-                <td className="bar-cell">
-                  <Bar value={r.eig / max} color={r.node_id === chosen ? C.cyan : C.indigo} />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      ) : null}
-    </div>
-  );
-}
-
-export default function EpistemicLockBox({ step }: { step: StepPayload }): JSX.Element {
-  const draft = useHarnessStore((s) => s.draft);
+export default function EpistemicLockBox({ step, held }: { step: StepPayload; held?: HeldResult | null }): JSX.Element {
+  const liveDraft = useHarnessStore((s) => s.draft);
   const setDraft = useHarnessStore((s) => s.setDraft);
   const lock = useHarnessStore((s) => s.lockRawPrediction);
-  const setMicTarget = useHarnessStore((s) => s.setMicTarget);
-  const micTarget = useHarnessStore((s) => s.micTarget);
   const submitStep = useHarnessStore((s) => s.submitStep);
   const busy = useHarnessStore((s) => s.busy.submit);
+  const [why, setWhy] = useState(false);
 
+  const done = Boolean(held);
+  const draft = held ? held.draft : liveDraft;
   const isPF = step.kind === 'PRODUCTIVE_FAILURE';
-  // §6.2: every PROBE / PREDICT / CHECK step is locked (API Law 3 makes it mandatory when options_locked=true).
   const needsLock = !isPF;
   const locked = draft.rawLockedAtMs !== null;
   const gateOpen = !needsLock || locked;
   const rawLen = draft.rawPrediction.trim().length;
   const hasOptions = step.options.length > 0;
-
-  // Law 3: Cmd/Ctrl+Enter anywhere locks the raw prediction while the lock is pending.
-  useEffect(() => {
-    if (!needsLock || locked) return;
-    const onKey = (e: KeyboardEvent): void => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-        e.preventDefault();
-        lock();
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [needsLock, locked, lock]);
+  const chosen = isChipValue(draft.confidence);
+  const correctId = held ? correctFromFeedback(held.result.feedback_markdown) : null;
 
   const canSubmit = useMemo(() => {
-    if (busy) return false;
+    if (busy || done) return false;
     if (!gateOpen) return false;
-    if (hasOptions) return draft.selectedOption !== '';
+    if (hasOptions) return draft.selectedOption !== '' && chosen;
     if (isPF) return draft.text.trim().length > 0 || draft.rawPrediction.trim().length > 0;
     return true;
-  }, [busy, gateOpen, hasOptions, draft.selectedOption, draft.text, draft.rawPrediction, isPF]);
+  }, [busy, done, gateOpen, hasOptions, draft.selectedOption, draft.text, draft.rawPrediction, isPF, chosen]);
 
   const submit = (): void => {
     if (!canSubmit) return;
     void submitStep(isPF && !draft.rawPrediction.trim() ? { raw_prediction_locked: draft.text.trim() } : undefined);
   };
 
-  const lockLatency = locked && draft.rawLockedAtMs !== null ? draft.rawLockedAtMs - draft.stepShownAt : 0;
+  /** PREDICT has no options: locking the guess is the whole step. */
+  const lockAndMaybeSubmit = (): void => {
+    if (done || busy) return;
+    if (!lock()) return;
+    if (!hasOptions) void submitStep();
+  };
+
+  const primary = !gateOpen || (!hasOptions && !isPF) ? lockAndMaybeSubmit : submit;
+  usePrimaryAction(primary, !done);
 
   return (
-    <div className="stream-card lockbox">
-      <StepHeader step={step} />
+    <article className="card question">
+      <CardHead step={step} />
       <div className="prompt">
-        <MathText text={step.prompt_latex} />
+        <MathText text={cleanPrompt(step.prompt_latex)} />
       </div>
-      {step.kind === 'PROBE' && step.eig_table.length ? <EigTable rows={step.eig_table} chosen={step.target_node_ids[0]} /> : null}
 
       {isPF ? (
-        <div className="pf-note">
-          <b>Productive failure.</b> Generate as many solution attempts and representations as you can before any instruction. Wrong
-          attempts are logged as <span className="mono">EXPLORATION_LOGGED</span> and are not penalised — they prime the canonical
-          solution you will see next.
-        </div>
-      ) : null}
-
-      {needsLock ? (
-        <div className={`raw-stage${locked ? ' locked' : ''}`}>
-          <div className="raw-head">
-            <span className="raw-title">Stage 1 · Raw prediction</span>
-            {micTarget === 'raw' && !locked ? <span className="mic-target mono">● dictation → here</span> : null}
-            <span className="spacer" />
+        <>
+          <MathField
+            label="Your attempts"
+            placeholder="Try anything: a special case, a picture, a small example. Dead ends are useful."
+            value={draft.text}
+            onChange={(v) => setDraft({ text: v })}
+            micTarget="dock"
+            rows={5}
+            readOnly={done}
+            autoFocus
+          />
+          {!done ? (
+            <div className="actions">
+              <PrimaryButton onClick={submit} disabled={!canSubmit} busy={busy} busyLabel="Saving…">
+                Show me the idea
+              </PrimaryButton>
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <>
+          <MathField
+            label="Your guess, in your own words"
+            placeholder="Before you see any choices: what do you expect, and why? Half-formed is fine."
+            value={draft.rawPrediction}
+            onChange={(v) => setDraft({ rawPrediction: v })}
+            micTarget="raw"
+            rows={3}
+            readOnly={locked || done}
+            autoFocus={!locked}
+          />
+          <div className="lock-row">
             {locked ? (
-              <span className="mono lock-stamp" title={new Date(draft.rawLockedAtMs ?? 0).toISOString()}>
-                🔒 locked {fmtDateTime(new Date(draft.rawLockedAtMs ?? 0).toISOString())} · +{(lockLatency / 1000).toFixed(1)}s
-              </span>
+              <span className="locked-note">✓ Guess locked in</span>
             ) : (
-              <span className={`mono char-count${rawLen >= MIN_RAW ? ' ok' : ''}`}>
-                {rawLen}/{MIN_RAW}
-              </span>
+              <>
+                <PrimaryButton
+                  onClick={lockAndMaybeSubmit}
+                  disabled={rawLen < MIN_RAW}
+                  busy={busy}
+                  busyLabel="Saving…"
+                  title={rawLen < MIN_RAW ? `Write at least ${MIN_RAW} characters` : undefined}
+                >
+                  Lock in guess
+                </PrimaryButton>
+                <span className="muted small">
+                  {rawLen < MIN_RAW
+                    ? 'One sentence is enough.'
+                    : hasOptions
+                      ? 'The choices appear once your guess is locked in.'
+                      : 'Then read on and see how close you were.'}
+                </span>
+              </>
             )}
           </div>
-          {locked ? (
-            <div className="raw-locked mono">{draft.rawPrediction}</div>
-          ) : (
-            <>
-              <textarea
-                className="raw-input"
-                rows={3}
-                autoFocus
-                value={draft.rawPrediction}
-                placeholder="Before seeing any options: what do you expect, and why? Stream of consciousness — half-formed is fine."
-                onFocus={() => setMicTarget('raw')}
-                onChange={(e) => setDraft({ rawPrediction: e.target.value })}
-                onKeyDown={(e) => {
-                  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    lock();
-                  }
-                }}
-              />
-              <div className="raw-actions">
-                <button className="btn primary" disabled={rawLen < MIN_RAW} onClick={() => lock()}>
-                  🔒 Lock In Raw Prediction <span className="kbd mono">⌘/Ctrl+Enter</span>
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-      ) : null}
+        </>
+      )}
 
       {hasOptions ? (
-        <div className={`options-wrap${gateOpen ? ' open' : ' sealed'}`}>
-          <div className="options" aria-hidden={!gateOpen}>
-            {step.options.map((o, i) => (
-              <button
-                key={o.id}
-                className={`option${draft.selectedOption === o.id ? ' selected' : ''}`}
-                disabled={!gateOpen}
-                tabIndex={gateOpen ? 0 : -1}
-                onClick={() => setDraft({ selectedOption: o.id })}
-              >
-                <span className="opt-key mono">{String.fromCharCode(65 + i)}</span>
-                <MathText text={o.label_latex} latexField inline />
-              </button>
-            ))}
+        <div className={`options-zone${gateOpen ? ' open' : ''}`}>
+          <div className="options" role="radiogroup" aria-label="Answer choices" aria-hidden={!gateOpen}>
+            {step.options.map((o, i) => {
+              const sel = draft.selectedOption === o.id;
+              const right = correctId !== null && o.id === correctId;
+              const wrong = done && sel && correctId !== null && !right;
+              return (
+                <button
+                  key={o.id}
+                  role="radio"
+                  aria-checked={sel}
+                  className={`option${sel ? ' on' : ''}${right ? ' right' : ''}${wrong ? ' wrong' : ''}`}
+                  disabled={!gateOpen || done}
+                  tabIndex={gateOpen && !done ? 0 : -1}
+                  onClick={() => setDraft({ selectedOption: o.id })}
+                >
+                  <span className="opt-key" aria-hidden="true">
+                    {String.fromCharCode(65 + i)}
+                  </span>
+                  <span className="opt-text">
+                    <MathText text={o.label_latex} latexField inline />
+                  </span>
+                </button>
+              );
+            })}
           </div>
           {!gateOpen ? (
-            <div className="lock-overlay">
-              <div className="lock-icon">🔒</div>
-              <div className="lock-title">Epistemic Lock Active</div>
-              <div className="lock-copy">
-                Log your raw stream-of-consciousness prediction or intuition first to prevent recognition cues from contaminating
-                retrieval.
-              </div>
-              <div className="lock-science">
-                Pretesting effect (Richland, Kornell &amp; Kao 2009; Kornell, Hays &amp; Bjork 2009): an unaided retrieval attempt —
-                even a wrong one — made <i>before</i> the answer is visible measurably improves what you learn from it. Options would turn
-                recall into recognition.
-              </div>
+            <div className="options-veil" aria-hidden="true">
+              <span>Answer choices appear here after you lock in your guess.</span>
             </div>
           ) : null}
         </div>
-      ) : gateOpen && !isPF ? (
-        <div className="verify-prompt">
-          <span className="mono tag cyan">DIRECT VERIFICATION</span> No options for this step — write the derivation or symbolic check in the
-          dock; the Symbolic Verifier will test it.
+      ) : null}
+
+      {hasOptions && gateOpen ? (
+        <div className="after-lock">
+          {why || draft.text ? (
+            <MathField
+              label="Why this choice? (optional)"
+              placeholder="A line of reasoning helps Pólya see how you think."
+              value={draft.text}
+              onChange={(v) => setDraft({ text: v })}
+              micTarget="dock"
+              rows={2}
+              readOnly={done}
+            />
+          ) : !done ? (
+            <button className="text-btn" onClick={() => setWhy(true)}>
+              Add your reasoning
+            </button>
+          ) : null}
+          <ConfidenceChips value={draft.confidence} onChange={(v) => setDraft({ confidence: v })} disabled={done} />
+          {!done ? (
+            <div className="actions">
+              <PrimaryButton onClick={submit} disabled={!canSubmit} busy={busy} busyLabel="Checking…">
+                Check
+              </PrimaryButton>
+              {!draft.selectedOption ? <span className="muted small">Pick an answer, then say how sure you are.</span> : !chosen ? <span className="muted small">How sure are you?</span> : null}
+            </div>
+          ) : null}
         </div>
       ) : null}
 
-      <TelemetryInputDock
-        label={isPF ? 'Your attempts (exploration log)' : gateOpen ? 'Stage 2 · Verification thinking' : 'Verification thinking (unlocks with the prediction)'}
-        placeholder={
-          isPF
-            ? 'Try anything: special cases, d=1, pictures, brute force. Every attempt is telemetry.'
-            : 'Why this option? Check shapes, limits, the scalar case… LaTeX welcome: \\mathbb{E}[q^\\top k] = 0'
-        }
-        onShiftEnter={submit}
-        shiftEnterLabel="submit step"
-        disabled={!gateOpen}
-        actions={[
-          {
-            label: hasOptions && !draft.selectedOption && gateOpen ? 'Select an option' : isPF ? 'Submit attempt' : 'Submit',
-            onClick: submit,
-            disabled: !canSubmit,
-            busy,
-          },
-        ]}
-      />
-    </div>
+      {held ? <ResultBlock held={held} /> : null}
+
+      <Details>
+        <StepDetails step={step} held={held} />
+      </Details>
+    </article>
   );
 }

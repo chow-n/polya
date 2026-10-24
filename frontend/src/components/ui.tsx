@@ -1,4 +1,4 @@
-/** Shared presentational primitives + formatting helpers used across the instrument panels. */
+/** Legacy presentational primitives + formatting helpers used by the Advanced (instrument) panels and Details. */
 import { useEffect, useRef, type ReactNode } from 'react';
 import type { CueVector, NodeType, Outcome, SessionMode, SubMode } from '../types/harness';
 
@@ -20,7 +20,7 @@ export const C = {
   slate: '#334155',
 };
 
-export const DOMAIN_COLORS: Record<string, string> = {
+const DOMAIN_COLORS: Record<string, string> = {
   'Measure-Theoretic Probability': C.indigo,
   'Transformers & Attention': C.emerald,
   'Reinforcement Learning': C.amber,
@@ -236,15 +236,6 @@ export function CuePentagon({ cues, size = 168 }: { cues: CueVector; size?: numb
 
 export function Spinner(): JSX.Element {
   return <span className="spinner" aria-hidden="true" />;
-}
-
-export function EmptyState({ title, children }: { title: string; children?: ReactNode }): JSX.Element {
-  return (
-    <div className="empty">
-      <div className="empty-title">{title}</div>
-      {children ? <div className="empty-body">{children}</div> : null}
-    </div>
-  );
 }
 
 export function isTypingTarget(t: EventTarget | null): boolean {
