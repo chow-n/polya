@@ -1,6 +1,6 @@
 ---
 slug: model-eval-85
-status: spec-drafted
+status: approved
 bead: none
 started: 2026-10-23
 ---
@@ -46,4 +46,4 @@ controller] now, they are small and need no data".
 
 # Open questions
 
-# Pending question: approval of SPEC.md (PAUSED by user 2026-10-23; when resumed: one worker only, no parallel agents)
+# Pending question: none — APPROVED by Nathan ("go") 2026-10-24; build with one worker

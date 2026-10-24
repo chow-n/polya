@@ -1,9 +1,9 @@
 ---
 slug: model-eval-85
-status: draft
+status: approved
 bead: none
-approved_by:
-approved_at:
+approved_by: Nathan
+approved_at: 2026-10-24T02:56:17-05:00
 ---
 # Model scoreboard + 85% difficulty controller
 
