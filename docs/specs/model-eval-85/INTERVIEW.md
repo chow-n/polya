@@ -44,6 +44,12 @@ controller] now, they are small and need no data".
 # Reuse
 - cognitive_math (bkt_posterior, retrievability, murphy_decomposition), orchestrator.apply_assessment, ./polya CLI.
 
+# Build notes (2026-10-24)
+- Shipped v0.4.0 (11822aa). FR3 simulation check reads "settled success" = mean success over answers after the first
+  third, since a single 10-answer EWMA reading is too noisy (sd ≈ 0.15) to assert ±0.08 on.
+- Observed: hard-failure resets (kept per spec) fire on most misses in teaching, so Δ spends much time at 0.5; the
+  practice cue level is unaffected by resets and does the real tracking. EWMA over 10 makes the level swing L1↔L4.
+
 # Open questions
 
 # Pending question: none — APPROVED by Nathan ("go") 2026-10-24; build with one worker
