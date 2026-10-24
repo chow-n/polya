@@ -76,9 +76,11 @@ def compute_stats() -> dict[str, Any]:
 
 
 def _settings_out() -> dict[str, Any]:
+    eng = llm.engine_status()
     return {"provider": settings.provider, "active_engine": llm.describe_engine(), "keys_present": llm.keys_present(),
             "deepgram_available": bool(settings.keys.get("deepgram")),
             "native_dictation_available": native_speech.available(), "claude_cli_available": llm.claude_cli_available(),
+            "codex_available": eng["codex_available"], "chatgpt_browser": eng["chatgpt_browser"],
             "model_overrides": dict(settings.models), "target_success": config.load_prefs()["target_success"]}
 
 
@@ -316,12 +318,23 @@ async def put_settings(req: SettingsUpdate) -> dict[str, Any]:
         if target is None:
             raise HTTPException(422, f"target_success must be one of {list(config.TARGET_CHOICES)}")
         config.save_prefs(target_success=target)
+    if req.provider is not None:
+        config.save_prefs(provider=req.provider)   # the engine choice survives restarts (chatgpt-engine FR6)
     settings.update(req.provider, {"anthropic": req.anthropic_api_key, "gemini": req.gemini_api_key,
                                    "openai": req.openai_api_key, "openrouter": req.openrouter_api_key,
                                    "deepgram": req.deepgram_api_key}, req.model_overrides)
     out = _settings_out()
     await hub.broadcast("stats", compute_stats())
     return out
+
+
+@app.post("/api/engines/chatgpt-browser/login")
+async def chatgpt_browser_login() -> dict[str, Any]:
+    """Open the private ChatGPT browser engine's window for a manual sign-in (chatgpt-engine FR5)."""
+    eng = llm.local_engine("chatgpt_browser")
+    if not eng or not hasattr(eng, "login"):
+        raise HTTPException(404, "The ChatGPT browser engine is not installed on this Mac.")
+    return await eng.login()
 
 
 @app.get("/api/model-eval", response_model=ModelEvalOut)

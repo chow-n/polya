@@ -126,6 +126,7 @@ export const api = {
   settings: () => request<SettingsOut>('GET', '/api/settings'),
   updateSettings: (body: SettingsUpdate) => request<SettingsOut>('PUT', '/api/settings', body),
   modelEval: () => request<ModelEvalOut>('GET', '/api/model-eval'),
+  chatgptLogin: () => request<{ opened: boolean; message: string }>('POST', '/api/engines/chatgpt-browser/login'),
 };
 
 // =================================================================== state types
@@ -487,6 +488,12 @@ export const useHarnessStore = create<HarnessState>()((set, get) => {
       case 'pong':
         if (pingSentAt) set({ wsLatencyMs: Math.round(performance.now() - pingSentAt) });
         break;
+      case 'engine_attention': {
+        const p = ev.payload as unknown as WsPayloads['engine_attention'];
+        const who = p.engine === 'chatgpt_browser' ? 'ChatGPT needs you in the Pólya browser window' : `${p.engine} needs your attention`;
+        s.toast('error', `${who} (${p.reason}). Using the next engine meanwhile.`);
+        break;
+      }
       case 'error': {
         const p = ev.payload as unknown as WsPayloads['error'];
         s.toast('error', `Server: ${p.message ?? 'unknown error'}`);

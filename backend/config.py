@@ -38,10 +38,12 @@ PORT_FILE = HOME / ".port"
 
 API_PORT = int(env("API_PORT", "8000"))
 CLAUDE_CLI_TIMEOUT_S = float(env("CLAUDE_TIMEOUT", "90"))
+CODEX_TIMEOUT_S = float(env("CODEX_TIMEOUT", "120"))
 SYMPY_TIMEOUT_S = 5
 ARXIV_TIMEOUT_S = 6.0
 
-PROVIDERS = ("auto", "anthropic", "gemini", "openai", "openrouter", "claude_cli", "deterministic")
+PROVIDERS = ("auto", "anthropic", "gemini", "openai", "openrouter", "claude_cli", "codex_cli", "chatgpt_browser",
+             "deterministic")
 
 DEFAULT_MODELS = {
     "anthropic": env("ANTHROPIC_MODEL", "claude-sonnet-5-5"),
@@ -84,7 +86,7 @@ def migrate_legacy_home(home: Path, legacy: Path) -> str | None:
     return f"moved {legacy} -> {home} (symlink left at old path)"
 
 
-PREF_DEFAULTS = {"target_success": 0.85}
+PREF_DEFAULTS = {"target_success": 0.85, "provider": None}   # provider None = POLYA_LLM or "auto"
 TARGET_CHOICES = (0.80, 0.85, 0.90)
 
 
@@ -99,8 +101,12 @@ def load_prefs() -> dict:
         data = json.loads(prefs_path().read_text())
     except (OSError, ValueError):
         return out
-    if isinstance(data, dict) and data.get("target_success") in TARGET_CHOICES:
+    if not isinstance(data, dict):
+        return out
+    if data.get("target_success") in TARGET_CHOICES:
         out["target_success"] = data["target_success"]
+    if data.get("provider") in PROVIDERS:
+        out["provider"] = data["provider"]
     return out
 
 
@@ -121,7 +127,8 @@ class RuntimeSettings:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self.provider: str = env("LLM", "auto")
+        # POLYA_LLM wins (tests force "deterministic"); otherwise the engine chosen in Settings (chatgpt-engine FR6)
+        self.provider: str = env("LLM") or load_prefs()["provider"] or "auto"
         if self.provider not in PROVIDERS:
             self.provider = "auto"
         self.keys: dict[str, str] = {
@@ -148,6 +155,10 @@ class RuntimeSettings:
     @staticmethod
     def claude_cli_path() -> str | None:
         return shutil.which("claude")
+
+    @staticmethod
+    def codex_cli_path() -> str | None:
+        return shutil.which("codex") or next((str(p) for p in (Path.home() / ".local/bin/codex",) if p.exists()), None)
 
 
 settings = RuntimeSettings()

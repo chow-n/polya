@@ -543,7 +543,16 @@ export interface DemoTelemetryAck {
   cue_updates: string[];
 }
 
-export type LLMProvider = 'auto' | 'anthropic' | 'gemini' | 'openai' | 'openrouter' | 'claude_cli' | 'deterministic';
+export type LLMProvider =
+  | 'auto'
+  | 'anthropic'
+  | 'gemini'
+  | 'openai'
+  | 'openrouter'
+  | 'claude_cli'
+  | 'codex_cli'
+  | 'chatgpt_browser'
+  | 'deterministic';
 
 export const LLM_PROVIDERS: LLMProvider[] = [
   'auto',
@@ -552,8 +561,17 @@ export const LLM_PROVIDERS: LLMProvider[] = [
   'openai',
   'openrouter',
   'claude_cli',
+  'codex_cli',
+  'chatgpt_browser',
   'deterministic',
 ];
+
+/** The private ChatGPT browser engine (present only on its owner's Mac). */
+export interface ChatGPTBrowserStatus {
+  available: boolean;
+  signed_in: boolean | null;
+  last_error: string | null;
+}
 
 export interface SettingsOut {
   provider: LLMProvider;
@@ -562,6 +580,8 @@ export interface SettingsOut {
   deepgram_available: boolean;
   native_dictation_available: boolean; // on-device macOS speech, Pólya.app only
   claude_cli_available: boolean;
+  codex_available: boolean; // `codex` installed and signed in with a ChatGPT plan
+  chatgpt_browser: ChatGPTBrowserStatus;
   model_overrides: Record<string, string>;
   target_success: number; // difficulty target, persisted in ~/Polya/prefs.json
 }
@@ -595,6 +615,7 @@ export type WsEventType =
   | 'stats'
   | 'notes_changed'
   | 'pong'
+  | 'engine_attention'
   | 'error';
 
 export interface WsEvent {
@@ -622,6 +643,7 @@ export interface WsPayloads {
   stats: StatsOut;
   notes_changed: { path: string };
   pong: Record<string, unknown>;
+  engine_attention: { engine: string; reason: string };
   error: { message: string };
 }
 

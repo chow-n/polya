@@ -5,7 +5,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePrefs, type ThemePref } from '../store/prefs';
-import { useHarnessStore } from '../store/useHarnessStore';
+import { api, useHarnessStore } from '../store/useHarnessStore';
 import { LLM_PROVIDERS, TARGET_CHOICES, type LLMProvider, type SettingsUpdate } from '../types/harness';
 import { Details, MOD_KEY, Spinner, useEscape } from './kit';
 import ModelScoreboard from './ModelScoreboard';
@@ -17,6 +17,8 @@ const PROVIDER_LABEL: Record<LLMProvider, string> = {
   openai: 'OpenAI API',
   openrouter: 'OpenRouter',
   claude_cli: 'Claude app on this Mac',
+  codex_cli: 'ChatGPT via Codex (your ChatGPT plan)',
+  chatgpt_browser: 'ChatGPT in browser (experimental)',
   deterministic: 'Offline (built in, no AI)',
 };
 
@@ -71,6 +73,34 @@ function ScratchEditor(): JSX.Element {
           {busy ? <Spinner /> : null}Save
         </button>
       </div>
+    </div>
+  );
+}
+
+function ChatGPTBrowserNote(): JSX.Element {
+  const st = useHarnessStore((s) => s.settings?.chatgpt_browser);
+  const toast = useHarnessStore((s) => s.toast);
+  const [opening, setOpening] = useState(false);
+  const signIn = (): void => {
+    setOpening(true);
+    api
+      .chatgptLogin()
+      .then((r) => toast('info', r.message))
+      .catch((e: unknown) => toast('error', e instanceof Error ? e.message : String(e)))
+      .finally(() => setOpening(false));
+  };
+  return (
+    <div className="engine-note">
+      <p className="small warn-line">Automating chatgpt.com breaks OpenAI&rsquo;s terms and can get your account flagged. Use at your own risk.</p>
+      <p className="muted small">
+        Pólya talks to ChatGPT in its own browser window, one Temporary Chat per step, so nothing lands in your history. If ChatGPT asks you to sign
+        in or prove you are human, the window comes forward and Codex answers meanwhile.
+        {st?.signed_in === true ? ' Signed in.' : st?.signed_in === false ? ' Not signed in yet.' : ''}
+        {st?.last_error ? ` Last problem: ${st.last_error}` : ''}
+      </p>
+      <button className="btn-secondary" onClick={signIn} disabled={opening}>
+        {opening ? <Spinner /> : null}Sign in to ChatGPT
+      </button>
     </div>
   );
 }
@@ -184,14 +214,24 @@ export default function SettingsSheet({ onClose }: { onClose: () => void }): JSX
           <label className="plain-field">
             <span className="field-label">Engine</span>
             <select value={provider} onChange={(e) => setProvider(e.target.value as LLMProvider)}>
-              {LLM_PROVIDERS.map((p) => (
-                <option key={p} value={p} disabled={p === 'claude_cli' && settings !== null && !settings.claude_cli_available}>
-                  {PROVIDER_LABEL[p]}
-                  {p === 'claude_cli' && settings && !settings.claude_cli_available ? ' (not found)' : ''}
-                </option>
-              ))}
+              {LLM_PROVIDERS.filter((p) => p !== 'chatgpt_browser' || settings?.chatgpt_browser.available || provider === p).map((p) => {
+                const missing = settings !== null && ((p === 'claude_cli' && !settings.claude_cli_available) || (p === 'codex_cli' && !settings.codex_available));
+                return (
+                  <option key={p} value={p} disabled={missing}>
+                    {PROVIDER_LABEL[p]}
+                    {missing ? ' (not found)' : ''}
+                  </option>
+                );
+              })}
             </select>
           </label>
+          {provider === 'codex_cli' ? (
+            <p className="muted small">
+              Uses the Codex app signed in with your ChatGPT plan. Each step uses some of your Codex allowance. If Codex fails, the Claude app answers
+              instead.
+            </p>
+          ) : null}
+          {provider === 'chatgpt_browser' ? <ChatGPTBrowserNote /> : null}
           {KEY_FIELDS.filter((f) => f.presentKey === provider).map((f) => {
             const set = keyPresent(present, f.presentKey);
             return (

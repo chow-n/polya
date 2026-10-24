@@ -463,19 +463,27 @@ class DemoTelemetry(BaseModel):
     summary: str = ""
 
 
+class ChatGPTBrowserStatus(BaseModel):
+    available: bool                    # the private local engine is installed on this Mac
+    signed_in: Optional[bool] = None   # None = not checked yet
+    last_error: Optional[str] = None
+
+
 class SettingsOut(BaseModel):
-    provider: Literal["auto", "anthropic", "gemini", "openai", "openrouter", "claude_cli", "deterministic"]
+    provider: Literal["auto", "anthropic", "gemini", "openai", "openrouter", "claude_cli", "codex_cli", "chatgpt_browser", "deterministic"]
     active_engine: str
     keys_present: dict[str, bool]
     deepgram_available: bool
     native_dictation_available: bool   # on-device macOS speech, Pólya.app only
     claude_cli_available: bool
+    codex_available: bool              # `codex` installed and signed in (ChatGPT plan)
+    chatgpt_browser: ChatGPTBrowserStatus
     model_overrides: dict[str, str]
     target_success: float              # difficulty target, persisted in ~/Polya/prefs.json
 
 
 class SettingsUpdate(BaseModel):
-    provider: Optional[Literal["auto", "anthropic", "gemini", "openai", "openrouter", "claude_cli", "deterministic"]] = None
+    provider: Optional[Literal["auto", "anthropic", "gemini", "openai", "openrouter", "claude_cli", "codex_cli", "chatgpt_browser", "deterministic"]] = None
     anthropic_api_key: Optional[str] = None
     gemini_api_key: Optional[str] = None
     openai_api_key: Optional[str] = None

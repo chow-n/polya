@@ -2475,3 +2475,20 @@ textarea.code,
 .scoreboard .dtable th {
   white-space: nowrap;
 }
+
+/* ------------------------------------------------------------------ AI engine notes (chatgpt-engine) */
+.engine-note {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  margin: 4px 0 8px;
+}
+.engine-note p {
+  margin: 0;
+}
+.warn-line {
+  color: var(--mid);
+  background: var(--mid-wash);
+  border-radius: var(--r-field);
+  padding: 6px 10px;
+}
