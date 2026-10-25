@@ -1,6 +1,6 @@
 ---
 slug: topic-map
-status: interviewing
+status: approved
 bead: none (learn-harness is not a gc rig)
 started: 2026-10-24
 ---
@@ -19,12 +19,16 @@ new goal into 4–8 ideas and how they connect before teaching starts. This coul
 - Offline content: content_bank (20 nodes) else generic_content (orchestrator.py:44) — weak for new topics.
 
 # Decision tree
-- D1 [CP] Goal matching when unsure: silent stricter matching vs a "Did you mean…?" choice — OPEN
-- D2 [CP] Show/edit the proposed topic map before teaching vs start straight away — OPEN
-- D3 Notes grounding: attached + automatic best passages vs attached only — OPEN
+- D1 [CP] Goal matching when unsure: silent stricter matching vs a "Did you mean…?" choice — ACCEPTED
+- D2 [CP] Show/edit the proposed topic map before teaching vs start straight away — ACCEPTED
+- D3 Notes grounding: attached + automatic best passages vs attached only — ACCEPTED
 - D4 No AI engine + new topic: today's single-node fallback with a clear message — DEFERRED (default)
 
 # Ledger
+- D1 ACCEPTED: stricter automatic matching, no prompt. 2026-10-25
+- D2 ACCEPTED: start teaching straight away. 2026-10-25
+- D3 ACCEPTED: attached notes, else 3 best passages. 2026-10-25
+- Spec approved by Nathan ("Yes, build all three") 2026-10-25.
 
 # Assumptions
 - Decomposition = one AI call returning 4–8 ideas (type, statement, intuition) + DEDUCTION edges, reusing existing node ids
