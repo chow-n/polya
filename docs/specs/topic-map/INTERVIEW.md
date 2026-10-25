@@ -52,3 +52,10 @@ D2 — Recommend start teaching straight away; the new topic's map appears on th
 4–8 ideas first so you can remove/add before teaching.
 D3 — Recommend ground lessons in notes you attach, and when none are attached, in the 3 best-matching passages from your
 notes folder (named in Details). Alt: attached notes only.
+
+# Build notes (2026-10-25)
+- Live (claude_cli, scratch copy of ~/Polya): "imitation learning" → 8 ideas (7 new: covariate shift, compounding
+  error, DAgger, cliff MDP…), reused ax_linearity_expectation, no Q-learning; 93 s to the first probe.
+- Matching checked on 23 phrasings: no false matches; misses ("rotary embeddings", "Jensen's inequality") go to the
+  AI map, which may reuse the existing idea.
+- Also fixed: probe Details showed the AI's answer explanation ("Correct (C): …") before answering.

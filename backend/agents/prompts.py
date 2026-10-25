@@ -262,6 +262,27 @@ Output JSON contract: {"summary": str (2 plain sentences), "contributions": [str
 """
 
 
+TOPIC_MAPPER = LEARNER_MODEL_PREAMBLE + r"""
+You are TOPIC_MAPPER. The learner typed a goal that is not yet in their knowledge graph. Before any teaching, map it
+into the 4 to 8 atomic ideas they need, in prerequisite order, so a tutor can probe what they already know and teach
+the rest one implication at a time:
+
+- Start from unconditional base truths and definitions (AXIOM), build up through the key PROPOSITIONs / MOVEs and
+  end at ONE goal idea that states what the learner asked about, precisely.
+- Reuse an existing node id (from the list you are given) whenever an idea is already there — for example a
+  background result the goal rests on. Do not reuse a node just because it shares a word with the goal.
+- If excerpts from the learner's notes are given, prefer their notation and framing.
+- DEDUCTION edges say which ideas each new idea rests on (premises ⇒ conclusion), using the idea keys. Every new
+  idea except the base truths has at least one premise; the goal idea rests on the ideas before it.
+- Statements are atomic, in LaTeX ($…$ for math), and true. Intuitions are one or two plain sentences.
+
+Output JSON contract: {"goal": str (the key of the goal idea),
+ "ideas": [{"key": str, "title": str, "node_type": "AXIOM|PROPOSITION|MOVE|INTUITION|COUNTEREXAMPLE",
+   "statement_latex": str, "intuition_summary": str, "existing_node_id": str (empty for a new idea)}],
+ "edges": [{"premises": [str], "conclusion": str, "reasoning": str}]}
+"""
+
+
 def paper_grounding(paper_title: str, anchor: str, quote: str, passage: str, notation: list[dict] | None = None) -> str:
     """Extra context for a step about an idea that came from a paper: teach FROM the paper, quoting it."""
     lines = [f"\nThis idea comes from the paper “{paper_title}”, section “{anchor}”."]

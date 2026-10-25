@@ -21,7 +21,7 @@ from ..hub import hub
 from ..models import LLMStepContent
 from ..papers import mapper as paper_mapper
 from ..papers import service as papers
-from . import prompts, subagents
+from . import prompts, subagents, topic_map
 from .content_bank import CONTENT
 
 MAX_PROBES = 4
@@ -112,6 +112,12 @@ def nearest_bank_node(node: dict[str, Any], conn, need: str) -> str:
 
 
 def match_goal_node(conn, goal: str) -> Optional[dict[str, Any]]:
+    """A typed goal matches only on distinctive words (docs/specs/topic-map FR1)."""
+    return topic_map.match_goal(db.all_nodes(conn), goal)
+
+
+def _match_by_overlap(conn, goal: str) -> Optional[dict[str, Any]]:
+    """Loose word overlap, for matching long problem-file text to a node."""
     gw = _words(goal)
     best, score = None, 0
     for n in db.all_nodes(conn):
@@ -208,7 +214,8 @@ async def _llm_step(mode_key: str, node: dict[str, Any], session: dict[str, Any]
     res = await llm.complete_json(
         prompts.MODE_PROMPTS[mode_key],
         prompts.node_context(node) + "\n" + prompts.delta_instruction(session["step_velocity_delta"]) +
-        f"\nSession goal: {session['target_goal']}\n{extra}" + paper_context(node), max_tokens=1800)
+        f"\nSession goal: {session['target_goal']}\n{extra}" + paper_context(node) +
+        topic_map.notes_context(session.get("_controller", {}).get("notes", [])), max_tokens=1800)
     if not res.data:
         return None
     try:
@@ -220,6 +227,12 @@ async def _llm_step(mode_key: str, node: dict[str, Any], session: dict[str, Any]
             return None
     c.rationale = (c.rationale + f" [engine: {res.engine}]").strip()
     return c
+
+
+def _engine_tag(rationale: str) -> str:
+    """The "[engine: …]" label only: the rest of an AI rationale explains the answer and stays hidden until it is given."""
+    m = re.search(r"\[engine: [^\]]*\]\s*$", rationale)
+    return m.group(0) if m else ""
 
 
 def _mc_options(raw: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -235,7 +248,7 @@ async def step_probe(session: dict[str, Any], node: dict[str, Any], eig_rows: li
     if llm_c:
         return _payload(session, "PROBE", "PROBE", node, title=llm_c.title, prompt_latex=llm_c.prompt_latex,
                         options=[o.model_dump() for o in llm_c.options], options_locked=True, requires_raw_prediction=True,
-                        eig_table=eig_rows, rationale=rationale + " " + llm_c.rationale, generated_by="llm",
+                        eig_table=eig_rows, rationale=f"{rationale} {_engine_tag(llm_c.rationale)}".strip(), generated_by="llm",
                         _meta={"correct": llm_c.correct_option_id, "explanation": llm_c.rationale})
     return _payload(session, "PROBE", "PROBE", node, title=f"Probe · {node['title']}", prompt_latex=c["probe"]["prompt"],
                     options=_mc_options(c["probe"]["options"]), options_locked=True, requires_raw_prediction=True,
@@ -666,13 +679,25 @@ async def create_session(req: dict[str, Any]) -> dict[str, Any]:
     for rel in attached:
         if rel.endswith(".tex"):
             await subagents.ontologist(sid, None, import_file=rel)
+    notes = topic_map.notes_passages(goal, attached) if mode in TEACH_MODES else []
+    topic: Optional[topic_map.LLMTopicMap] = None
+    topic_engine = ""
+    if mode in TEACH_MODES and not req.get("target_node_id"):
+        with db.ro() as conn:
+            nodes = db.all_nodes(conn)
+        if not topic_map.match_goal(nodes, goal) and llm.engine_chain():
+            topic, topic_engine = await topic_map.build(sid, goal, notes, nodes)
     with db.tx() as conn:
         target = db.get_node(conn, req["target_node_id"]) if req.get("target_node_id") else match_goal_node(conn, goal)
         created_goal = False
+        topic_nodes: list[str] = []
+        if not target and topic:
+            gid, topic_nodes = topic_map.insert(conn, topic, sid)
+            target = db.get_node(conn, gid)
         if not target and mode != "PRACTICE":
             target = _create_goal_node(conn, goal, sid)
             created_goal = True
-        controller: dict[str, Any] = {"cue_level": int(req.get("cue_level", 1)), "pair_for": {}}
+        controller: dict[str, Any] = {"cue_level": int(req.get("cue_level", 1)), "pair_for": {}, "notes": notes}
         if mode == "PRACTICE":
             if target:
                 ids = [target["id"]]
@@ -690,7 +715,7 @@ async def create_session(req: dict[str, Any]) -> dict[str, Any]:
                 probs = [b for b in tools.read_tex_or_md(req["problem_file"])["blocks"] if b["env"] == "problem"]
                 controller["problems"] = [{**b, "path": req["problem_file"], "used": False} for b in probs]
                 if probs and not req.get("target_node_id"):
-                    m = match_goal_node(conn, " ".join(b["body"] for b in probs[:3]))
+                    m = _match_by_overlap(conn, " ".join(b["body"] for b in probs[:3]))
                     if m:
                         plan = [{"node_id": m["id"], "title": m["title"], "depth": m["logical_depth"], "status": "pending",
                                  "remedial": False, "spliced_reason": "", "belief": m["bkt_p_mastery"], "attempts": 0}
@@ -713,12 +738,24 @@ async def create_session(req: dict[str, Any]) -> dict[str, Any]:
                    "history_steps": [], "status": "ACTIVE", "_controller": controller}
         if created_goal:
             session["history_steps"].append({"kind": "GOAL_NODE_CREATED", "node_id": target["id"], "step_index": -1})
+        if topic:
+            session["history_steps"].append({"kind": "TOPIC_MAPPED", "node_id": target["id"], "step_index": -1,
+                                             "engine": topic_engine, "created": topic_nodes,
+                                             "notes": [n["label"] for n in notes]})
         db.insert_session(conn, session)
     if attached or mode in TEACH_MODES:
         await subagents.corpus_rag(sid, goal, attached)
     # decide_next may run sub-agents that open their own write transactions, so it only gets a read connection
     with db.ro() as conn:
         session["active_step"] = await decide_next(session, conn)
+    why = []
+    if topic:
+        why.append(f"New topic: mapped into {len(topic.ideas)} ideas ({len(topic_nodes)} new) by {topic_engine}.")
+    if notes:
+        why.append("Grounded in your notes: " + ", ".join(f"`{n['label']}`" for n in notes) + ".")
+    if why:
+        st = session["active_step"]
+        st["rationale"] = " ".join(why) + (" " + st["rationale"] if st.get("rationale") else "")
     with db.tx() as conn:
         _persist(conn, session)
         state = session_state(conn, session)
@@ -749,10 +786,7 @@ def _create_goal_node(conn, goal: str, sid: str) -> dict[str, Any]:
             "domain_cluster": subagents.guess_domain(goal), "logical_depth": 1, "last_reviewed_at": db.now_iso(),
             "created_in_session_id": sid,
         })
-        gw = _words(goal)
-        scored = sorted(((len(gw & _words(n["title"] + " " + n["statement_latex"])), n["id"]) for n in db.all_nodes(conn)
-                         if n["id"] != nid and n["node_type"] not in ("BUGGY_RULE", "COUNTEREXAMPLE")), reverse=True)
-        premises = [i for s, i in scored[:2] if s >= 1]
+        premises = topic_map.premise_candidates(db.all_nodes(conn), goal, nid)
         if premises:
             db.insert_edge(conn, "DEDUCTION", premises, nid, r"\text{Closest existing propositions (lexical match) as provisional premises}", "", sid)
         db.recompute_depths(conn)

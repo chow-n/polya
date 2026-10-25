@@ -33,6 +33,13 @@
   teaching → REFEREE on the key argument → FEYNMAN on its assumptions → "Paper complete"). Ideas that came from a paper
   are grounded in its passage in every later step (`orchestrator.paper_context`). Tests never touch the network.
 
+## Topic maps (approved 2026-10-25, docs/specs/topic-map/SPEC.md)
+- `backend/agents/topic_map.py`: typed goals match only on distinctive words (IDF-weighted, ≥60% coverage; field words
+  like "learning" never count). No match + an AI engine → TOPIC_MAPPER maps the goal into 4–8 ideas (`t_*` nodes,
+  `he_topic_*` edges, reusing existing ids; new edges never conclude in existing ideas) before the first step.
+- Teaching sessions carry `_controller.notes` (attached files' blocks, else ≤3 matching workspace blocks) into every
+  `_llm_step`; named in the first step's Details. Probe Details never show the AI's answer explanation.
+
 ---
 # Verbatim specification
 
