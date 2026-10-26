@@ -22,6 +22,7 @@ export type StepKind =
   | 'PRACTICE_CHUNK'
   | 'REFEREE'
   | 'FEYNMAN'
+  | 'LEARN'
   | 'COMPLETE';
 export type Outcome =
   | 'SOLVED_CLEAN'
@@ -259,6 +260,15 @@ export interface StepPayload {
   chunks: ChunkEvaluation[];
   contrastive_pair_node_id: string | null;
   generated_by: string;
+  learn_ideas: LearnIdea[]; // LEARN steps (docs/specs/learn-chat)
+}
+
+/** One idea in a learning chat and how likely Pólya thinks you are to recall it now. */
+export interface LearnIdea {
+  node_id: string;
+  title: string;
+  p_recall: number;
+  status: 'todo' | 'current' | 'covered' | 'moved_on';
 }
 
 export interface SessionOut {
@@ -281,6 +291,7 @@ export interface SessionState {
   session: SessionOut;
   active_step: StepPayload;
   traces: TraceOut[];
+  stuck_after_ms: number; // docs/specs/explain FR3
 }
 
 export interface CreateSessionRequest {
@@ -306,6 +317,7 @@ export interface StepSubmission {
   prosody?: ProsodyMetrics;
   flagged_step_index?: number | null;
   counterexample_text?: string;
+  elapsed_ms?: number; // card shown → submit
 }
 
 export interface NodeUpdate {
@@ -334,6 +346,7 @@ export interface StepResult {
   created_nodes: string[];
   state: SessionState;
   controller?: ControllerReading | null;
+  offer?: Offer | null; // docs/specs/explain FR3
 }
 
 /** The success-rate difficulty controller's reading after a graded answer (docs/specs/model-eval-85). */
@@ -584,6 +597,7 @@ export interface SettingsOut {
   chatgpt_browser: ChatGPTBrowserStatus;
   model_overrides: Record<string, string>;
   target_success: number; // difficulty target, persisted in ~/Polya/prefs.json
+  fetch_sources: boolean; // learn-chat: look up Wikipedia and arXiv for new topics
 }
 
 export const TARGET_CHOICES = [0.8, 0.85, 0.9] as const;
@@ -597,6 +611,7 @@ export interface SettingsUpdate {
   deepgram_api_key?: string | null;
   model_overrides?: Record<string, string> | null;
   target_success?: number | null;
+  fetch_sources?: boolean | null;
 }
 
 export interface HealthOut {
@@ -757,4 +772,89 @@ export interface PaperDetail extends PaperOut {
   ideas: PaperIdeaOut[];
   sources: { reference: PaperSourceOut[]; citation: PaperSourceOut[]; explainer: PaperSourceOut[] };
   links: { arxiv: string | null; pdf: string | null; code: string | null; semantic_scholar: string | null };
+}
+
+// ------------------------------------------------------------------ explanations (docs/specs/explain, docs/specs/learn-chat)
+export type OfferTrigger = 'CONFIDENT_WRONG' | 'WHEEL_SPINNING' | 'WRONG' | 'WEAK_REASONING' | 'STUCK';
+
+export interface Offer {
+  trigger: OfferTrigger;
+  label: string;
+  action: 'OFFER';
+  step_index: number;
+  node_id: string;
+}
+
+export interface ExplainMsg {
+  id: string;
+  step_index: number;
+  node_id: string;
+  role: 'learner' | 'polya' | 'say_back';
+  kind: string;
+  text: string;
+  trigger: string;
+  style: string;
+  engine: string;
+  before_answer: boolean;
+  meta: {
+    say_back_prompt?: string;
+    question?: string;
+    cited?: number[];
+    engine_note?: string;
+    verdict?: string;
+    is_correct?: boolean;
+    answering?: string;
+    [k: string]: unknown;
+  };
+  created_at: string;
+}
+
+export interface SourceOut {
+  n: number;
+  kind: 'notes' | 'paper' | 'wikipedia' | 'arxiv';
+  title: string;
+  url: string;
+}
+
+export type ExplainAction = 'ASK' | 'EXPLAIN' | 'DIFFERENT' | 'SIMPLER' | 'OFFER';
+
+export interface ExplainRequest {
+  action: ExplainAction;
+  message?: string;
+  trigger?: string;
+  step_index?: number | null;
+  attempt?: string;
+}
+
+export interface ExplainReply {
+  reply_markdown: string;
+  style: string;
+  engine: string;
+  node_id: string;
+  say_back_prompt: string | null;
+  thread: ExplainMsg[];
+}
+
+export interface ExplainThread {
+  thread: ExplainMsg[];
+  offer: Offer | null;
+  sources: SourceOut[];
+}
+
+export interface SayBackOut {
+  verdict_markdown: string;
+  is_correct: boolean;
+  trace_quality_score: number;
+  node_update: NodeUpdate;
+  thread: ExplainMsg[];
+}
+
+export type LearnAction = 'OPEN_REPLY' | 'SKIP' | 'REPLY' | 'ASK' | 'GO_ON' | 'QUIZ_ME';
+
+export interface LearnTurn {
+  thread: ExplainMsg[];
+  learn_ideas: LearnIdea[];
+  ready: boolean;
+  sources: SourceOut[];
+  engine: string;
 }

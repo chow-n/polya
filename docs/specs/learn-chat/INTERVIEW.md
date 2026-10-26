@@ -46,4 +46,11 @@ feels I am ready to recall"
 # Reuse
 - explain spec components; `topic_map.notes_passages`; `papers` fetch; `subagents.literature`; `subagents.diagnose`.
 
+# Build notes (2026-10-26)
+- Clarification: a run of never-studied ideas skips ideas that are already done/mastered and stops at an unfinished
+  idea with history (otherwise reused, mastered prerequisites split one topic into several one-idea chats).
+- One tutor call per reply: it grades the answer and writes both a "continue" and a "next idea" turn; Pólya's model
+  (p_recall ≥ 0.70 or 4 exchanges) picks which is shown. Free text ending in "?" is sent as ASK, else REPLY.
+- Start recall is the card's primary action (Cmd/Ctrl+Enter); "Quiz me now" is a button.
+
 # Pending question: none (approved 2026-10-26)

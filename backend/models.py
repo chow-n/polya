@@ -14,7 +14,7 @@ SessionMode = Literal["PROBE", "PRODUCTIVE_FAILURE", "TEACH", "PRACTICE", "REFER
 SubMode = Literal["STANDARD", "PROOF_REFEREE", "FEYNMAN_STUDENT", "PAPER"]   # PAPER: docs/specs/paper-reading
 Phase = Literal["PROBE", "PRODUCTIVE_FAILURE", "PREDICT", "READING", "CHECK", "PRACTICE_CHUNK", "REFEREE"]
 StepKind = Literal[
-    "PROBE", "PRODUCTIVE_FAILURE", "PREDICT", "READING", "CHECK", "PRACTICE_CHUNK", "REFEREE", "FEYNMAN", "COMPLETE"
+    "PROBE", "PRODUCTIVE_FAILURE", "PREDICT", "READING", "CHECK", "PRACTICE_CHUNK", "REFEREE", "FEYNMAN", "LEARN", "COMPLETE"
 ]
 Outcome = Literal["SOLVED_CLEAN", "SOLVED_WITH_HINTS", "PARTIAL", "FAILED", "HIGH_CONFIDENCE_ERROR", "EXPLORATION_LOGGED"]
 HintRung = Literal["NONE", "R0", "R1", "R2", "R3", "R4"]
@@ -192,6 +192,13 @@ class DuelTurn(BaseModel):
     timestamp_ms: float = 0
 
 
+class LearnIdea(BaseModel):
+    node_id: str
+    title: str
+    p_recall: float                        # P(L)(1−s) + (1−P(L))g: predicted chance of recalling it now
+    status: Literal["todo", "current", "covered", "moved_on"] = "todo"
+
+
 class StepPayload(BaseModel):
     step_id: str
     step_index: int
@@ -220,6 +227,7 @@ class StepPayload(BaseModel):
     chunks: list["ChunkEvaluation"] = Field(default_factory=list)
     contrastive_pair_node_id: Optional[str] = None
     generated_by: str = "deterministic"    # engine name
+    learn_ideas: list[LearnIdea] = Field(default_factory=list)   # LEARN steps (docs/specs/learn-chat)
 
 
 class SessionOut(BaseModel):
@@ -242,6 +250,7 @@ class SessionState(BaseModel):
     session: SessionOut
     active_step: StepPayload
     traces: list[TraceOut]
+    stuck_after_ms: int = 120_000          # docs/specs/explain FR3: offer a nudge after this long on a graded card
 
 
 class CreateSessionRequest(BaseModel):
@@ -267,6 +276,7 @@ class StepSubmission(BaseModel):
     prosody: ProsodyMetrics = Field(default_factory=ProsodyMetrics)
     flagged_step_index: Optional[int] = None    # PROOF_REFEREE
     counterexample_text: str = ""               # PROOF_REFEREE
+    elapsed_ms: float = 0                       # card shown → submit (docs/specs/explain FR3)
 
 
 class NodeUpdate(BaseModel):
@@ -306,6 +316,7 @@ class StepResult(BaseModel):
     created_nodes: list[str] = Field(default_factory=list)
     state: SessionState
     controller: Optional[ControllerReadingOut] = None
+    offer: Optional["Offer"] = None             # docs/specs/explain FR3
 
 
 class HintRequest(BaseModel):
@@ -480,6 +491,7 @@ class SettingsOut(BaseModel):
     chatgpt_browser: ChatGPTBrowserStatus
     model_overrides: dict[str, str]
     target_success: float              # difficulty target, persisted in ~/Polya/prefs.json
+    fetch_sources: bool = True         # learn-chat: look up Wikipedia and arXiv for new topics
 
 
 class SettingsUpdate(BaseModel):
@@ -491,6 +503,7 @@ class SettingsUpdate(BaseModel):
     deepgram_api_key: Optional[str] = None
     model_overrides: Optional[dict[str, str]] = None
     target_success: Optional[float] = None   # one of 0.80 / 0.85 / 0.90
+    fetch_sources: Optional[bool] = None
 
 
 class CalibrationBinOut(BaseModel):
@@ -665,3 +678,87 @@ class PaperDetail(PaperOut):
     ideas: list[PaperIdeaOut]
     sources: PaperSourcesOut
     links: dict[str, Optional[str]]
+
+
+# ------------------------------------------------------------------ explanations (docs/specs/explain, docs/specs/learn-chat)
+class Offer(BaseModel):
+    trigger: Literal["CONFIDENT_WRONG", "WHEEL_SPINNING", "WRONG", "WEAK_REASONING", "STUCK"]
+    label: str
+    action: Literal["OFFER"] = "OFFER"
+    step_index: int
+    node_id: str
+
+
+class ExplainMsg(BaseModel):
+    id: str
+    step_index: int
+    node_id: str
+    role: Literal["learner", "polya", "say_back"]
+    kind: str
+    text: str
+    trigger: str = ""
+    style: str = ""
+    engine: str = ""
+    before_answer: bool = False
+    meta: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+
+
+class SourceOut(BaseModel):
+    n: int
+    kind: Literal["notes", "paper", "wikipedia", "arxiv"]
+    title: str
+    url: str = ""
+
+
+class ExplainRequest(BaseModel):
+    action: Literal["ASK", "EXPLAIN", "DIFFERENT", "SIMPLER", "OFFER"]
+    message: str = ""
+    trigger: str = ""
+    step_index: Optional[int] = None       # the card being looked at (default: the active step)
+    attempt: str = ""                      # what the learner has typed on that card so far
+
+
+class ExplainReply(BaseModel):
+    reply_markdown: str
+    style: str
+    engine: str
+    node_id: str
+    say_back_prompt: Optional[str] = None
+    thread: list[ExplainMsg]
+
+
+class ExplainThread(BaseModel):
+    thread: list[ExplainMsg]
+    offer: Optional[Offer] = None
+    sources: list[SourceOut] = Field(default_factory=list)
+
+
+class SayBackRequest(BaseModel):
+    text: str
+    confidence: float = 0.5
+    message_id: Optional[str] = None       # the explanation whose prompt is being answered (default: the latest)
+
+
+class SayBackOut(BaseModel):
+    verdict_markdown: str
+    is_correct: bool
+    trace_quality_score: float
+    node_update: NodeUpdate
+    thread: list[ExplainMsg]
+
+
+class LearnRequest(BaseModel):
+    action: Literal["OPEN_REPLY", "SKIP", "REPLY", "ASK", "GO_ON", "QUIZ_ME"]
+    message: str = ""
+
+
+class LearnTurn(BaseModel):
+    thread: list[ExplainMsg]
+    learn_ideas: list[LearnIdea]
+    ready: bool
+    sources: list[SourceOut]
+    engine: str
+
+
+StepResult.model_rebuild()

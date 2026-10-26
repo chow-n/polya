@@ -302,6 +302,22 @@ export default function SettingsSheet({ onClose }: { onClose: () => void }): JSX
               </span>
             </span>
           </label>
+          <label className="switch">
+            <input
+              type="checkbox"
+              checked={settings?.fetch_sources ?? true}
+              disabled={busy || !settings}
+              onChange={(e) => void updateSettings({ fetch_sources: e.target.checked })}
+            />
+            <span className="switch-track" aria-hidden="true" />
+            <span>
+              Look up Wikipedia and arXiv for new topics
+              <span className="muted small block">
+                The learning chat for ideas you haven't studied cites your notes first, then these sources. Only the topic and idea
+                names are sent.
+              </span>
+            </span>
+          </label>
           {advanced ? (
             <label className="plain-field">
               <span className="field-label">Model overrides (provider=model, one per line)</span>

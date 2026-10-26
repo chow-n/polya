@@ -11,12 +11,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import cognitive_math as cm
 from . import config, db, llm, model_eval, native_speech, seed, tools
-from .agents import orchestrator, subagents
+from .agents import orchestrator, subagents, tutor
 from .config import settings
 from .hub import hub
 from .models import (
     ALL_AGENTS, ArtifactOut, ChunkEvaluation, ChunkRequest, CreateSessionRequest, DemoTelemetry, DuelReply, DuelRequest,
-    DueItem, GraphOut, HintOut, HintRequest, ModelEvalOut, NodeDetail, PaperCreate, PaperDetail, PaperOut, PracticeQueueItem,
+    DueItem, ExplainReply, ExplainRequest, ExplainThread, GraphOut, HintOut, HintRequest, LearnRequest, LearnTurn,
+    ModelEvalOut, SayBackOut, SayBackRequest, NodeDetail, PaperCreate, PaperDetail, PaperOut, PracticeQueueItem,
     ScratchOut, ScratchWrite, SessionOut,
     SessionState, SettingsOut, SettingsUpdate, StatsOut, StepResult, StepSubmission, SubagentRunRequest, WorkspaceFile,
     WorkspaceFileContent,
@@ -86,7 +87,8 @@ def _settings_out() -> dict[str, Any]:
             "deepgram_available": bool(settings.keys.get("deepgram")),
             "native_dictation_available": native_speech.available(), "claude_cli_available": llm.claude_cli_available(),
             "codex_available": eng["codex_available"], "chatgpt_browser": eng["chatgpt_browser"],
-            "model_overrides": dict(settings.models), "target_success": config.load_prefs()["target_success"]}
+            "model_overrides": dict(settings.models), "target_success": config.load_prefs()["target_success"],
+            "fetch_sources": config.load_prefs()["fetch_sources"]}
 
 
 # ------------------------------------------------------------------ REST
@@ -323,6 +325,8 @@ async def put_settings(req: SettingsUpdate) -> dict[str, Any]:
         if target is None:
             raise HTTPException(422, f"target_success must be one of {list(config.TARGET_CHOICES)}")
         config.save_prefs(target_success=target)
+    if req.fetch_sources is not None:
+        config.save_prefs(fetch_sources=req.fetch_sources)
     if req.provider is not None:
         config.save_prefs(provider=req.provider)   # the engine choice survives restarts (chatgpt-engine FR6)
     settings.update(req.provider, {"anthropic": req.anthropic_api_key, "gemini": req.gemini_api_key,
@@ -517,6 +521,32 @@ async def _native_dictation(ws: WebSocket) -> None:
         dictation.stop()
 
 
+# ------------------------------------------------------------------ explanations (docs/specs/explain, docs/specs/learn-chat)
+@app.get("/api/sessions/{session_id}/explain", response_model=ExplainThread)
+async def explain_thread(session_id: str) -> dict[str, Any]:
+    return tutor.get_thread(session_id)
+
+
+@app.post("/api/sessions/{session_id}/explain", response_model=ExplainReply)
+async def explain_ask(session_id: str, req: ExplainRequest) -> dict[str, Any]:
+    return await tutor.ask(session_id, req.action, req.message, req.trigger, req.step_index, req.attempt)
+
+
+@app.post("/api/sessions/{session_id}/say-back", response_model=SayBackOut)
+async def explain_say_back(session_id: str, req: SayBackRequest) -> dict[str, Any]:
+    out = await tutor.say_back(session_id, req.text, req.confidence, req.message_id)
+    await hub.broadcast("graph_updated", {"reason": "say_back"})
+    return out
+
+
+@app.post("/api/sessions/{session_id}/learn", response_model=LearnTurn)
+async def learn_chat(session_id: str, req: LearnRequest) -> dict[str, Any]:
+    out = await tutor.learn_turn(session_id, req.action, req.message)
+    await hub.broadcast("graph_updated", {"reason": "learn_chat"})
+    return out
+
+
+
 # ------------------------------------------------------------------ built frontend (single-process / app mode)
 def mount_frontend(application: FastAPI, dist) -> bool:
     """Serve frontend/dist at / with SPA fallback; /api and /ws routes registered above take precedence."""
@@ -543,3 +573,4 @@ def mount_frontend(application: FastAPI, dist) -> bool:
 
 
 mount_frontend(app, config.FRONTEND_DIST)
+

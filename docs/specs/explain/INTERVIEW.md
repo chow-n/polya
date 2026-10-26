@@ -50,4 +50,9 @@ them when needed. Of course, think of a smart scientific way to do this"
 
 # Open questions
 
+# Build notes (2026-10-26)
+- Chat evidence traces use phase READING (not CHECK) so unrated confidence never enters calibration; prediction phase
+  SAY_BACK keeps it out of the difficulty controller. Stuck threshold samples come from history `elapsed_ms`.
+- The Ask button is hidden on LEARN cards (the card is already a chat); `?` toggles it elsewhere.
+
 # Pending question: none (approved 2026-10-26)

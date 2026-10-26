@@ -15,6 +15,7 @@ export const KIND_LINE: Record<string, string> = {
   PRACTICE_CHUNK: 'Practice',
   REFEREE: 'Find the flaw',
   FEYNMAN: 'Explain it',
+  LEARN: 'Learn it first',
   COMPLETE: 'Done',
 };
 
@@ -52,7 +53,10 @@ export function CardHead({ step, children }: { step: StepPayload; children?: Rea
 // ------------------------------------------------------------------ inline result
 export function ResultBlock({ held }: { held: HeldResult }): JSX.Element {
   const continueFromResult = useHarnessStore((s) => s.continueFromResult);
+  const askPolya = useHarnessStore((s) => s.askPolya);
+  const thread = useHarnessStore((s) => s.chat.thread);
   const r = held.result;
+  const offer = r.offer && !thread.some((m) => m.role === 'polya' && m.step_index === r.offer?.step_index) ? r.offer : null;
   const head = outcomeHeadline(r.trace.outcome, held.step.kind);
   const fb = useMemo(() => plainFeedback(r.feedback_markdown), [r.feedback_markdown]);
   usePrimaryAction(continueFromResult, true);
@@ -67,6 +71,13 @@ export function ResultBlock({ held }: { held: HeldResult }): JSX.Element {
       {fb.main.map((p, i) => (
         <MathText key={i} text={p} className="result-body" />
       ))}
+      {offer ? (
+        <p className="offer-line">
+          <button className="text-btn inline" onClick={() => void askPolya('OFFER', { trigger: offer.trigger, stepIndex: offer.step_index })}>
+            {offer.label} <span aria-hidden="true">Ask Pólya →</span>
+          </button>
+        </p>
+      ) : null}
       <div className="actions">
         <PrimaryButton onClick={continueFromResult}>Continue</PrimaryButton>
       </div>

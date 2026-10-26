@@ -8,6 +8,7 @@ shown to the learner plus a hidden `_meta` with answer keys, never sent to the c
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -16,12 +17,12 @@ from typing import Any, Optional
 from fastapi import HTTPException
 
 from .. import cognitive_math as cm
-from .. import config, db, demos, llm, tools
+from .. import config, db, demos, llm, sources, tools
 from ..hub import hub
 from ..models import LLMStepContent
 from ..papers import mapper as paper_mapper
 from ..papers import service as papers
-from . import prompts, subagents, topic_map
+from . import explain, prompts, subagents, topic_map
 from .content_bank import CONTENT
 
 MAX_PROBES = 4
@@ -392,6 +393,34 @@ async def step_feynman(session: dict[str, Any], node: dict[str, Any], conn) -> d
                     _meta={"conditions": f["boundary_conditions"], "persona": f["persona"]})
 
 
+LEARN_OPENING = "Before we start: what do you already know about **{goal}**? A sentence or two is plenty, or skip."
+RECALL_WHY = ("Recall after a short lag, earliest idea first: retrieving an idea after the others have passed "
+              "strengthens it more than right after reading it (lag effect; interleaving).")
+
+
+def learn_ideas_out(learn: dict[str, Any], conn) -> list[dict[str, Any]]:
+    out = []
+    for nid in learn["ideas"]:
+        n = _node(conn, nid)
+        out.append({"node_id": nid, "title": n["title"], "p_recall": round(explain.p_recall(n), 3),
+                    "status": learn["status"].get(nid, "todo")})
+    return out
+
+
+def step_learn(session: dict[str, Any], nodes: list[dict[str, Any]], conn) -> dict[str, Any]:
+    """learn-chat: a run of never-studied ideas is taught as a conversation before any recall."""
+    ids = [n["id"] for n in nodes]
+    learn = {"ideas": ids, "current": 0, "exchanges": {}, "status": {i: "todo" for i in ids}, "covered_order": [],
+             "prior": "", "opened": False, "question": None, "ready": False}
+    learn["status"][ids[0]] = "current"
+    return _payload(session, "LEARN", "READING", nodes[0], target_node_ids=ids,
+                    title=f"Learning: {session['target_goal'][:80]}",
+                    prompt_latex=LEARN_OPENING.format(goal=session["target_goal"][:120]),
+                    rationale=(f"{len(ids)} idea(s) you haven't studied yet, so Pólya explains them first. Recall starts "
+                               f"once its model predicts you'll mostly succeed (≥ {explain.READY_RECALL:.0%} per idea)."),
+                    learn_ideas=learn_ideas_out(learn, conn), _meta={"learn": learn})
+
+
 def step_complete(session: dict[str, Any]) -> dict[str, Any]:
     done = sum(1 for p in session["dependency_plan"] if p["status"] in ("done", "probed_mastered"))
     return _payload(session, "COMPLETE", None, None, title="Session complete",
@@ -610,7 +639,7 @@ async def decide_next(session: dict[str, Any], conn) -> dict[str, Any]:
     if mode == "PROBE" and not meta.get("probing_done"):
         probes = sum(1 for h in hist if h["kind"] == "PROBE")
         beliefs = {p["node_id"]: p["belief"] for p in plan}
-        probed = [p["node_id"] for p in plan if p["status"] != "pending"]
+        probed = [p["node_id"] for p in plan if p["status"] != "pending" or explain.is_new(_node(conn, p["node_id"]))]
         v, table = cm.select_next_probe_node(beliefs, plan_edges(conn, plan), probed)
         if probes < MAX_PROBES and v and table[0].eig >= 0.25:
             rows = [{"node_id": e.node_id, "title": next(p["title"] for p in plan if p["node_id"] == e.node_id),
@@ -627,11 +656,29 @@ async def decide_next(session: dict[str, Any], conn) -> dict[str, Any]:
     if last and last["kind"] == "READING":
         return await step_check(session, _node(conn, last["node_id"]), conn, cue_level=2)
 
+    queue = meta.get("recall_queue") or []
+    while queue:   # learn-chat FR6: delayed, interleaved recall of the ideas just learned
+        rec = next((p for p in plan if p["node_id"] == queue[0] and p["status"] in ("pending", "active")), None)
+        queue.pop(0)
+        if rec:
+            rec["status"] = "active"
+            return await step_check(session, _node(conn, rec["node_id"]), conn, cue_level=2, rationale=RECALL_WHY)
+
     item = next((p for p in plan if p["status"] in ("pending", "probed_unmastered", "active")), None)
     if not item:
         return await _paper_finale(session, conn, meta) if sub == "PAPER" else step_complete(session)
     item["status"] = "active"
     node = _node(conn, item["node_id"])
+    if sub != "PAPER" and not item.get("learned") and not item.get("remedial") and explain.is_new(node):
+        run = []
+        for p in plan[plan.index(item):]:
+            if p["status"] in ("done", "probed_mastered", "skipped"):
+                continue   # finished ideas do not split the conversation
+            if p.get("learned") or p.get("remedial") or not explain.is_new(_node(conn, p["node_id"])):
+                break
+            p["status"] = "active"
+            run.append(_node(conn, p["node_id"]))
+        return step_learn(session, run, conn)
     delta = session["step_velocity_delta"]
     why = item.get("spliced_reason") or ""
     if delta >= 2.5 and not item.get("remedial"):
@@ -652,7 +699,8 @@ def session_state(conn, session: dict[str, Any]) -> dict[str, Any]:
     fresh = db.load_session(conn, session["id"]) or session
     return {"session": db.session_out({k: v for k, v in fresh.items() if k != "_controller"}),
             "active_step": public_step(fresh["active_step"]),
-            "traces": db.session_traces(conn, session["id"])}
+            "traces": db.session_traces(conn, session["id"]),
+            "stuck_after_ms": explain.stuck_after_ms(db.recent_elapsed_ms(conn))}
 
 
 def _persist(conn, session: dict[str, Any]) -> None:
@@ -680,12 +728,15 @@ async def create_session(req: dict[str, Any]) -> dict[str, Any]:
         if rel.endswith(".tex"):
             await subagents.ontologist(sid, None, import_file=rel)
     notes = topic_map.notes_passages(goal, attached) if mode in TEACH_MODES else []
+    open_task: Optional[asyncio.Future] = None
     topic: Optional[topic_map.LLMTopicMap] = None
     topic_engine = ""
     if mode in TEACH_MODES and not req.get("target_node_id"):
         with db.ro() as conn:
             nodes = db.all_nodes(conn)
         if not topic_map.match_goal(nodes, goal) and llm.engine_chain():
+            if config.load_prefs()["fetch_sources"]:
+                open_task = asyncio.ensure_future(sources.fetch_open(goal, []))
             topic, topic_engine = await topic_map.build(sid, goal, notes, nodes)
     with db.tx() as conn:
         target = db.get_node(conn, req["target_node_id"]) if req.get("target_node_id") else match_goal_node(conn, goal)
@@ -745,6 +796,8 @@ async def create_session(req: dict[str, Any]) -> dict[str, Any]:
         db.insert_session(conn, session)
     if attached or mode in TEACH_MODES:
         await subagents.corpus_rag(sid, goal, attached)
+    if mode in TEACH_MODES:
+        await _gather_sources(sid, goal, plan, notes, open_task)
     # decide_next may run sub-agents that open their own write transactions, so it only gets a read connection
     with db.ro() as conn:
         session["active_step"] = await decide_next(session, conn)
@@ -762,6 +815,26 @@ async def create_session(req: dict[str, Any]) -> dict[str, Any]:
     await hub.broadcast("session_updated", {"session_id": sid})
     await hub.broadcast("graph_updated", {"reason": "session_created"})
     return state
+
+
+async def _gather_sources(sid: str, goal: str, plan: list[dict[str, Any]], notes: list[dict[str, str]],
+                          open_task: Optional[asyncio.Future]) -> None:
+    """learn-chat FR5: number the notes and, for plans with never-studied ideas, fetch open sources for them."""
+    with db.ro() as conn:
+        new_titles = [p["title"] for p in plan if explain.is_new(_node(conn, p["node_id"]))]
+    if not new_titles:
+        if open_task:
+            open_task.cancel()
+        return
+    fetched: list[dict[str, str]] = []
+    if config.load_prefs()["fetch_sources"]:
+        if open_task:
+            fetched = await open_task + await sources.fetch_open(None, [t for t in new_titles if t.lower() != goal.lower()])
+        else:
+            fetched = await sources.fetch_open(goal, [t for t in new_titles if t.lower() != goal.lower()])
+    seen: set[str] = set()
+    fetched = [f for f in sorted(fetched, key=lambda f: sources.KIND_ORDER[f["kind"]]) if not (f["url"] in seen or seen.add(f["url"]))]
+    sources.store(sid, notes, fetched)
 
 
 def _contrastive_peer(conn, nid: str) -> Optional[str]:
@@ -915,10 +988,19 @@ async def submit(session_id: str, sub: dict[str, Any]) -> dict[str, Any]:
                                     "bkt_mastery_before": node["bkt_p_mastery"], "bkt_mastery_after": node["bkt_p_mastery"],
                                     "fsrs_stability_before": node["fsrs_stability"], "fsrs_stability_after": node["fsrs_stability"]}
     diag_md = ""
-    hist_entry: dict[str, Any] = {"kind": meta.get("hist_kind", kind), "node_id": node_id, "step_index": active["step_index"]}
+    hist_entry: dict[str, Any] = {"kind": meta.get("hist_kind", kind), "node_id": node_id, "step_index": active["step_index"],
+                                  "elapsed_ms": float(sub.get("elapsed_ms") or 0)}
+    if kind in explain.GRADED_KINDS:   # kept so a later "explain that card" knows the answer (docs/specs/explain FR1)
+        hist_entry["answer"] = str(meta.get("correct") or meta.get("answer_summary") or
+                                   (f"Step {meta['flawed_index']}" if meta.get("flawed_index") else ""))[:600]
+        hist_entry["explanation"] = str(meta.get("explanation") or "")[:1500]
 
-    if kind in ("PREDICT", "READING", "PRODUCTIVE_FAILURE"):
-        if kind == "PRODUCTIVE_FAILURE":
+    if kind in ("PREDICT", "READING", "PRODUCTIVE_FAILURE", "LEARN"):
+        if kind == "LEARN":
+            learned = meta.get("learn", {})
+            hist_entry["ideas"] = learned.get("ideas", [])
+            feedback.append("Recall starts now, beginning with the idea you learned first.")
+        elif kind == "PRODUCTIVE_FAILURE":
             feedback.append(f"**Your attempts are logged.** Canonical insight to compare against:\n\n{meta.get('insight', '')}")
         elif meta.get("paper_skim"):
             with db.tx() as conn:
@@ -1053,6 +1135,8 @@ async def submit(session_id: str, sub: dict[str, Any]) -> dict[str, Any]:
         elif kind in ("CHECK", "PRACTICE_CHUNK", "REFEREE", "FEYNMAN") and item:
             item["attempts"] = item.get("attempts", 0) + 1
             solved = bool(trace_fields["is_correct"])
+            if not solved:
+                item["fails"] = item.get("fails", 0) + 1
             if solved or item["attempts"] >= 2 or session["mode"] in ("PRACTICE", "REFEREE_DUEL"):
                 item["status"] = "done"
             else:
@@ -1074,8 +1158,27 @@ async def submit(session_id: str, sub: dict[str, Any]) -> dict[str, Any]:
             elif reading.action in ("HARDER", "EASIER"):
                 feedback.append(f"{'⏩' if reading.action == 'HARDER' else '⏪'} {reading.summary} "
                                 f"(step size Δ {reading.delta:.1f}, practice level {reading.cue_level}).")
-        elif kind in ("PREDICT", "READING", "PRODUCTIVE_FAILURE"):
-            pass
+        elif kind == "LEARN":
+            learned = meta.get("learn", {})
+            ideas = learned.get("ideas", [])
+            order = list(learned.get("covered_order", [])) + [i for i in ideas if i not in learned.get("covered_order", [])]
+            for p in plan:
+                if p["node_id"] in ideas and p["status"] == "active":
+                    p["status"] = "pending"
+                    p["learned"] = True
+            session.setdefault("_controller", {})["recall_queue"] = order
+        offer = None
+        if kind in explain.GRADED_KINDS:
+            explained = conn.execute("SELECT 1 FROM explanations WHERE session_id=? AND step_index=? AND role='polya'",
+                                     (session_id, active["step_index"])).fetchone() is not None
+            recent = [t for t in db.node_traces(conn, node_id, limit=6) if t["phase"] != "READING"][:2]
+            offer = explain.offer_for(kind, trace_fields["outcome"], trace_fields["is_correct"],
+                                      trace_fields["trace_quality_score"], trace_fields["bkt_mastery_after"],
+                                      (item or {}).get("fails", 0),
+                                      2 if len(recent) == 2 and not any(t["is_correct"] for t in recent) else 0, explained)
+            if offer:
+                offer.update(step_index=active["step_index"], node_id=node_id)
+        session.setdefault("_controller", {})["offer"] = offer
         session["history_steps"].append(hist_entry)
         session["current_step_index"] += 1
     with db.ro() as conn:
@@ -1096,7 +1199,7 @@ async def submit(session_id: str, sub: dict[str, Any]) -> dict[str, Any]:
     await hub.broadcast("graph_updated", {"reason": "assessment"})
     return {"trace": trace, "feedback_markdown": "\n\n".join(feedback + ([diag_md] if diag_md else [])),
             "node_updates": node_updates, "delta_before": delta_before, "delta_after": session["step_velocity_delta"],
-            "remedial_spliced": remedial, "created_nodes": created, "state": state,
+            "remedial_spliced": remedial, "created_nodes": created, "state": state, "offer": offer,
             "controller": ({"action": reading.action, "summary": reading.summary, "recent_success": reading.recent_success,
                             "target": reading.target, "window_n": reading.window_n, "delta": reading.delta,
                             "practice_level": reading.cue_level} if reading else None)}

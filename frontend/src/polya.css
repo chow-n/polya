@@ -2379,6 +2379,283 @@ textarea.code,
   display: contents;
 }
 
+/* ------------------------------------------------------------------ Ask Pólya + learning chat (docs/specs/explain, learn-chat) */
+.strip-actions {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+.ask-btn.on {
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.ask-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: super;
+}
+.focus.with-chat:not(.with-rails) .focus-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 400px;
+  gap: 24px;
+  align-items: start;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+.focus.with-rails.with-chat .focus-body {
+  grid-template-columns: 280px minmax(0, 1fr) 380px;
+}
+.chat-rail {
+  max-height: none;
+  overflow: visible;
+}
+.ask-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: calc(100vh - var(--header-h) - var(--strip-h) - 112px);
+  padding: 16px 16px 12px;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow);
+  animation: fade-in 0.2s ease-out;
+}
+.ask-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+.ask-title {
+  font-weight: 600;
+  color: var(--ink);
+}
+.ask-about {
+  color: var(--ink-2);
+  font-size: var(--t-s);
+}
+.ask-scroll {
+  flex: 1;
+  min-height: 120px;
+  overflow: auto;
+}
+.ask-empty {
+  color: var(--ink-2);
+  font-size: var(--t-s);
+  line-height: 1.5;
+}
+.chat-msgs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.msg-row {
+  display: flex;
+  flex-direction: column;
+}
+.msg {
+  max-width: 94%;
+  padding: 10px 13px;
+  border-radius: 14px;
+  font-size: var(--t-m);
+  line-height: 1.55;
+  color: var(--ink);
+}
+.msg.polya {
+  align-self: flex-start;
+  background: var(--paper-2);
+  font-family: var(--font-read);
+}
+.msg.learner {
+  align-self: flex-end;
+  background: var(--accent-wash-2);
+  white-space: pre-wrap;
+}
+.msg-note {
+  margin-top: 6px;
+  color: var(--ink-3);
+  font: 400 var(--t-xs) / 1.4 var(--font-ui);
+}
+.msg-verdict {
+  margin-top: 6px;
+  font-size: var(--t-s);
+}
+.msg-verdict.good {
+  color: var(--good);
+}
+.msg-verdict.mid {
+  color: var(--mid);
+}
+.msg-writing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-2);
+  font-size: var(--t-s);
+}
+.chat-divider {
+  margin: 10px 0 2px;
+  color: var(--ink-3);
+  font-size: var(--t-xs);
+  text-align: center;
+}
+.sayback {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--rule-2);
+  font-family: var(--font-ui);
+}
+.sayback-q {
+  margin-bottom: 8px;
+  font-size: var(--t-s);
+}
+.sayback-k {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--ink-2);
+  font-size: var(--t-xs);
+}
+.sayback-row,
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.chat-input {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  padding: 8px 11px;
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-field);
+  background: var(--surface);
+  color: var(--ink);
+  font: 400 15px/1.5 var(--font-ui);
+}
+textarea.chat-input {
+  min-height: 46px;
+  resize: vertical;
+}
+.chat-input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash-2);
+}
+.sources {
+  margin-top: 10px;
+  color: var(--ink-2);
+  font-size: var(--t-s);
+}
+.sources summary {
+  cursor: pointer;
+}
+.sources ol {
+  margin: 6px 0 0;
+  padding-left: 22px;
+}
+.sources li {
+  margin: 3px 0;
+}
+.sources a {
+  color: var(--accent-ink);
+}
+.sources .muted {
+  color: var(--ink-3);
+}
+.offer-line {
+  margin: 2px 0 6px;
+  font-size: var(--t-m);
+}
+.stuck-nudge {
+  max-width: var(--measure);
+  margin: 14px auto 0;
+  text-align: center;
+  font-size: var(--t-m);
+}
+.learn-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 4px 0 18px;
+}
+.learn-card .msg {
+  font-size: 16.5px;
+}
+.learn-btns {
+  margin-top: 10px;
+}
+.idea-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 18px;
+  padding: 0;
+  list-style: none;
+}
+.idea-chip {
+  position: relative;
+  overflow: hidden;
+  padding: 4px 12px;
+  border: 1px solid var(--rule-2);
+  border-radius: 999px;
+  color: var(--ink-2);
+  font-size: var(--t-xs);
+}
+.idea-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--accent-wash-2);
+  transition: width 0.4s ease-out;
+}
+.idea-name {
+  position: relative;
+}
+.idea-chip.current {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+.idea-chip.covered {
+  border-color: var(--good);
+  color: var(--good);
+}
+.idea-chip.covered .idea-fill {
+  background: var(--good-wash);
+}
+.idea-chip.moved_on {
+  border-style: dashed;
+}
+@media (max-width: 760px) {
+  .focus.with-chat:not(.with-rails) .focus-body,
+  .focus.with-rails.with-chat .focus-body {
+    display: block;
+  }
+  .focus.with-chat .focus-center {
+    padding-bottom: 72vh;
+  }
+  .chat-rail {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto;
+    z-index: 20;
+  }
+  .ask-panel {
+    height: 72vh;
+    border-radius: 16px 16px 0 0;
+    padding: 14px 16px 12px;
+  }
+  .strip-actions {
+    gap: 14px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

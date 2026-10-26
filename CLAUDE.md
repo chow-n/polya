@@ -40,6 +40,20 @@
 - Teaching sessions carry `_controller.notes` (attached files' blocks, else ≤3 matching workspace blocks) into every
   `_llm_step`; named in the first step's Details. Probe Details never show the AI's answer explanation.
 
+## Explanations + learning chat (approved 2026-10-26, docs/specs/explain + docs/specs/learn-chat)
+- Ask Pólya side chat (`AskPanel.tsx`, `?` key): `POST/GET /api/sessions/{id}/explain`, `/say-back`; handlers in
+  `backend/agents/tutor.py`, pure policy in `agents/explain.py` (offers after an attempt, none at P(L) ≥ 0.85; style
+  by P(L): worked example < 0.40 · contrast · terse ≥ 0.85; refutation for confident errors; stuck nudge never gives
+  the answer). Asking never changes scoring (D1); messages store `before_answer`. Side table `explanations`.
+- Never-studied ideas (`fsrs_reps == 0 and brier_count == 0`) are taught first in a LEARN step (`LearnChat.tsx`,
+  `POST /learn`): opening "what do you already know?", sourced turns ending in one small question, readiness =
+  P(L)(1−s)+(1−P(L))g ≥ 0.70 or 4 exchanges, then recall CHECKs earliest-covered idea first (`recall_queue`).
+  Probes skip new ideas; a run of new ideas skips finished ones and stops at an unfinished idea with history.
+- Chat evidence (learn replies, say-back): `apply_assessment` with hint rung R2, trace phase READING, prediction
+  phase LEARN_CHAT / SAY_BACK, excluded from `db.recent_successes` (difficulty controller) and calibration.
+- Sources: `backend/sources.py` + side table `session_sources` (notes, then Wikipedia, then arXiv; numbered [n]);
+  fetched at session creation (goal-level in parallel with the topic map, 20 s budget); pref `fetch_sources`.
+
 ---
 # Verbatim specification
 

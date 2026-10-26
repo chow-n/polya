@@ -86,7 +86,8 @@ def migrate_legacy_home(home: Path, legacy: Path) -> str | None:
     return f"moved {legacy} -> {home} (symlink left at old path)"
 
 
-PREF_DEFAULTS = {"target_success": 0.85, "provider": None}   # provider None = POLYA_LLM or "auto"
+PREF_DEFAULTS = {"target_success": 0.85, "provider": None,   # provider None = POLYA_LLM or "auto"
+                 "fetch_sources": True}                     # learn-chat D2: Wikipedia + arXiv for new topics
 TARGET_CHOICES = (0.80, 0.85, 0.90)
 
 
@@ -107,6 +108,8 @@ def load_prefs() -> dict:
         out["target_success"] = data["target_success"]
     if data.get("provider") in PROVIDERS:
         out["provider"] = data["provider"]
+    if isinstance(data.get("fetch_sources"), bool):
+        out["fetch_sources"] = data["fetch_sources"]
     return out
 
 

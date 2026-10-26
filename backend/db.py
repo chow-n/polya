@@ -206,6 +206,38 @@ CREATE TABLE IF NOT EXISTS paper_refs (
     FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
 );
 
+-- Side tables (docs/specs/explain, docs/specs/learn-chat): the session's explanation / learning-chat thread and the
+-- numbered sources it cites.
+CREATE TABLE IF NOT EXISTS explanations (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    step_index INTEGER NOT NULL,
+    node_id TEXT NOT NULL DEFAULT '',
+    role TEXT NOT NULL CHECK (role IN ('learner', 'polya', 'say_back')),
+    kind TEXT NOT NULL,                   -- ASK | EXPLAIN | DIFFERENT | SIMPLER | OFFER | SAY_BACK | LEARN | LEARN_Q
+    text TEXT NOT NULL,
+    trigger TEXT NOT NULL DEFAULT '',
+    style TEXT NOT NULL DEFAULT '',
+    engine TEXT NOT NULL DEFAULT '',
+    before_answer INTEGER NOT NULL DEFAULT 0,
+    meta_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS session_sources (
+    session_id TEXT NOT NULL,
+    n INTEGER NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('notes', 'paper', 'wikipedia', 'arxiv')),
+    title TEXT NOT NULL,
+    url TEXT NOT NULL DEFAULT '',
+    passage TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, n),
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_explanations_session ON explanations(session_id);
 CREATE INDEX IF NOT EXISTS idx_paper_nodes_node ON paper_nodes(node_id);
 CREATE INDEX IF NOT EXISTS idx_paper_refs_paper ON paper_refs(paper_id, direction, score);
 CREATE INDEX IF NOT EXISTS idx_traces_session ON telemetry_traces(session_id, step_index);
@@ -496,9 +528,14 @@ def insert_prediction(conn: sqlite3.Connection, p: dict[str, Any]) -> str:
     return row["id"]
 
 
+# evidence gathered right after an explanation (learn chat, say-it-back) never steers the difficulty controller
+CHAT_PHASES = ("LEARN_CHAT", "SAY_BACK")
+
+
 def recent_successes(conn: sqlite3.Connection, limit: int) -> list[int]:
     """success (0/1) of the last `limit` graded answers across all sessions, oldest first."""
-    rows = conn.execute("SELECT success FROM model_predictions ORDER BY rowid DESC LIMIT ?", (limit,)).fetchall()
+    rows = conn.execute("SELECT success FROM model_predictions WHERE phase NOT IN (?, ?) ORDER BY rowid DESC LIMIT ?",
+                        (*CHAT_PHASES, limit)).fetchall()
     return [r[0] for r in reversed(rows)]
 
 
@@ -510,6 +547,52 @@ def calibration_pairs(conn: sqlite3.Connection) -> list[tuple[float, int]]:
 
 
 # ------------------------------------------------------------------ artifacts
+def recent_elapsed_ms(conn: sqlite3.Connection, limit: int = 20) -> list[float]:
+    """Time-to-answer of the most recent graded cards across sessions (docs/specs/explain FR3, stuck nudge)."""
+    out: list[float] = []
+    for r in conn.execute("SELECT history_steps_json FROM sessions ORDER BY updated_at DESC LIMIT 15"):
+        for h in reversed(json.loads(r[0])):
+            if h.get("elapsed_ms") and h.get("kind") in ("PROBE", "CHECK", "PRACTICE_CHUNK", "REFEREE", "FEYNMAN"):
+                out.append(float(h["elapsed_ms"]))
+                if len(out) >= limit:
+                    return out
+    return out
+
+
+# ------------------------------------------------------------------ explanation thread + sources
+def insert_explanation(conn: sqlite3.Connection, m: dict[str, Any]) -> dict[str, Any]:
+    row = {"id": m.get("id") or new_id("ex"), "session_id": m["session_id"], "step_index": int(m.get("step_index", 0)),
+           "node_id": m.get("node_id", ""), "role": m["role"], "kind": m["kind"], "text": m["text"],
+           "trigger": m.get("trigger", ""), "style": m.get("style", ""), "engine": m.get("engine", ""),
+           "before_answer": int(bool(m.get("before_answer"))), "meta_json": json.dumps(m.get("meta") or {}),
+           "created_at": now_iso()}
+    conn.execute(f"INSERT INTO explanations ({', '.join(row)}) VALUES ({', '.join('?' * len(row))})", tuple(row.values()))
+    return _explanation_row(row)
+
+
+def _explanation_row(r: Any) -> dict[str, Any]:
+    d = dict(r)
+    d["meta"] = json.loads(d.pop("meta_json") or "{}")
+    d["before_answer"] = bool(d["before_answer"])
+    return d
+
+
+def session_thread(conn: sqlite3.Connection, session_id: str) -> list[dict[str, Any]]:
+    return [_explanation_row(r) for r in conn.execute(
+        "SELECT * FROM explanations WHERE session_id=? ORDER BY rowid", (session_id,))]
+
+
+def insert_source(conn: sqlite3.Connection, session_id: str, kind: str, title: str, url: str, passage: str) -> int:
+    n = conn.execute("SELECT COALESCE(MAX(n), 0) + 1 FROM session_sources WHERE session_id=?", (session_id,)).fetchone()[0]
+    conn.execute("INSERT INTO session_sources (session_id, n, kind, title, url, passage, fetched_at) VALUES (?,?,?,?,?,?,?)",
+                 (session_id, n, kind, title, url, passage, now_iso()))
+    return n
+
+
+def session_sources(conn: sqlite3.Connection, session_id: str) -> list[dict[str, Any]]:
+    return [dict(r) for r in conn.execute("SELECT * FROM session_sources WHERE session_id=? ORDER BY n", (session_id,))]
+
+
 def insert_artifact(conn: sqlite3.Connection, agent_name: str, status: str, title: str, content_type: str,
                     payload_text: str, session_id: Optional[str] = None, artifact_id: Optional[str] = None) -> str:
     aid = artifact_id or new_id("art")

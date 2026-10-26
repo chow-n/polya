@@ -22,23 +22,33 @@ import {
   type DuelReply,
   type DuelRequest,
   type DuelTurn,
+  type ExplainAction,
+  type ExplainMsg,
+  type ExplainReply,
+  type ExplainRequest,
+  type ExplainThread,
   type GraphOut,
   type HealthOut,
   type HintOut,
   type HintRequest,
   type LadderRung,
+  type LearnAction,
+  type LearnTurn,
   type ModelEvalOut,
   type NodeDetail,
+  type Offer,
   type PaperCreate,
   type PaperDetail,
   type PaperOut,
   type PracticeQueueItem,
   type ReadingNote,
+  type SayBackOut,
   type ScratchOut,
   type SessionOut,
   type SessionState,
   type SettingsOut,
   type SettingsUpdate,
+  type SourceOut,
   type StatsOut,
   type StepPayload,
   type StepResult,
@@ -150,6 +160,13 @@ export const api = {
   },
   refreshPaperSources: (id: string) => request<PaperDetail>('POST', `/api/papers/${encodeURIComponent(id)}/sources/refresh`),
   startPaperSession: (id: string) => request<SessionState>('POST', `/api/papers/${encodeURIComponent(id)}/session`),
+  explainThread: (id: string) => request<ExplainThread>('GET', `/api/sessions/${encodeURIComponent(id)}/explain`),
+  explain: (id: string, body: ExplainRequest) =>
+    request<ExplainReply>('POST', `/api/sessions/${encodeURIComponent(id)}/explain`, body),
+  sayBack: (id: string, body: { text: string; confidence?: number; message_id?: string | null }) =>
+    request<SayBackOut>('POST', `/api/sessions/${encodeURIComponent(id)}/say-back`, body),
+  learn: (id: string, body: { action: LearnAction; message?: string }) =>
+    request<LearnTurn>('POST', `/api/sessions/${encodeURIComponent(id)}/learn`, body),
 };
 
 /** An arXiv link or id typed into Learn (mirrors backend/papers/fetch.parse_arxiv_ref). */
@@ -221,7 +238,32 @@ export interface HeldResult {
   result: StepResult;
 }
 
-type BusyKey = 'create' | 'submit' | 'advance' | 'hint' | 'chunk' | 'duel' | 'session' | 'settings' | 'scratch' | 'dispatch';
+type BusyKey =
+  | 'create'
+  | 'submit'
+  | 'advance'
+  | 'hint'
+  | 'chunk'
+  | 'duel'
+  | 'session'
+  | 'settings'
+  | 'scratch'
+  | 'dispatch'
+  | 'explain'
+  | 'learn'
+  | 'sayBack';
+
+/** The session's explanation / learning-chat thread (docs/specs/explain, docs/specs/learn-chat). */
+export interface ChatState {
+  sessionId: string | null;
+  thread: ExplainMsg[];
+  offer: Offer | null;
+  sources: SourceOut[];
+  /** Pending request text shown while Pólya writes (cleared on reply). */
+  pending: string | null;
+}
+
+const blankChat = (sessionId: string | null = null): ChatState => ({ sessionId, thread: [], offer: null, sources: [], pending: null });
 
 const blankDrafts = (stepId: string | null): Drafts => ({
   stepId,
@@ -315,6 +357,9 @@ export interface HarnessState {
   /** Goal text of a session being created (shown in the skeleton while the engine prepares it). */
   creatingGoal: string | null;
   held: HeldResult | null;
+  chat: ChatState;
+  /** The Ask Pólya side chat is open. */
+  chatOpen: boolean;
   chunkLog: { stepId: string; items: ChunkEvaluation[] };
   duelLog: { stepId: string; turns: DuelTurn[]; reply: DuelReply | null };
   busy: Partial<Record<BusyKey, boolean>>;
@@ -373,6 +418,11 @@ export interface HarnessState {
   requestHint: (rung: LadderRung) => Promise<HintOut | null>;
   submitChunk: () => Promise<ChunkEvaluation | null>;
   sendDuel: () => Promise<DuelReply | null>;
+  loadThread: (sessionId: string) => Promise<void>;
+  setChatOpen: (open: boolean) => void;
+  askPolya: (action: ExplainAction, opts?: { message?: string; trigger?: string; stepIndex?: number }) => Promise<ExplainReply | null>;
+  sayBack: (text: string, messageId: string) => Promise<SayBackOut | null>;
+  learnAction: (action: LearnAction, message?: string) => Promise<LearnTurn | null>;
   runSubagent: (agent: AgentName, req: SubagentRunRequest) => Promise<ArtifactOut | null>;
   writeScratch: (content: string) => Promise<void>;
   pushScratchWs: (content: string) => void;
@@ -448,8 +498,11 @@ export const useHarnessStore = create<HarnessState>()((set, get) => {
       patch.duelLog = { stepId, turns: [], reply: null };
       prosodyEngine.resetWindow();
     }
+    const sessionChanged = s.chat.sessionId !== state.session.id;
+    if (sessionChanged) patch.chat = blankChat(state.session.id);
     set(patch);
     lsSet(LS_SESSION, state.session.id);
+    if (sessionChanged) void get().loadThread(state.session.id);
   };
 
   const scheduleRefresh = (...keys: RefreshKey[]): void => {
@@ -648,6 +701,8 @@ export const useHarnessStore = create<HarnessState>()((set, get) => {
     focusOpen: false,
     creatingGoal: null,
     held: null,
+    chat: blankChat(),
+    chatOpen: false,
     chunkLog: { stepId: '', items: [] },
     duelLog: { stepId: '', turns: [], reply: null },
     busy: {},
@@ -881,6 +936,7 @@ export const useHarnessStore = create<HarnessState>()((set, get) => {
         prosody: prosodyEngine.getMetrics(),
         flagged_step_index: d.flaggedStepIndex,
         counterexample_text: d.counterexample.trim(),
+        elapsed_ms: Date.now() - d.stepShownAt,
         ...overrides,
       };
       const sid = st.session.id;
@@ -888,11 +944,11 @@ export const useHarnessStore = create<HarnessState>()((set, get) => {
       if (res) {
         // Keep the answered card on screen with its inline result (graded kinds, or when a counterexample was found).
         const kind = st.active_step.kind;
-        const graded = kind !== 'PREDICT' && kind !== 'READING';
+        const graded = kind !== 'PREDICT' && kind !== 'READING' && kind !== 'LEARN';
         const chunks = s.chunkLog.stepId === st.active_step.step_id ? s.chunkLog.items : [];
         const held: HeldResult | null =
           graded || res.created_nodes.length > 0 ? { sessionId: sid, step: st.active_step, draft: d, chunks, result: res } : null;
-        set({ lastResult: { sessionId: sid, result: res }, held });
+        set((x) => ({ lastResult: { sessionId: sid, result: res }, held, chat: { ...x.chat, offer: res.offer ?? null } }));
         applySession(res.state);
         scheduleRefresh('graph', 'stats', 'due', 'queue', 'sessions', 'node');
       }
@@ -967,6 +1023,72 @@ export const useHarnessStore = create<HarnessState>()((set, get) => {
           draft: { ...x.draft, text: message },
         }));
       }
+      return r;
+    },
+    loadThread: async (sessionId) => {
+      const t = await guard(() => api.explainThread(sessionId), 'Load chat');
+      if (t && get().activeSessionId === sessionId) {
+        set((x) => ({ chat: { ...x.chat, sessionId, thread: t.thread, offer: t.offer, sources: t.sources } }));
+      }
+    },
+    setChatOpen: (open) => set({ chatOpen: open }),
+    askPolya: async (action, opts = {}) => {
+      const s = get();
+      const st = s.sessionState;
+      if (!st) return null;
+      const sid = st.session.id;
+      const viewing = s.held && s.held.sessionId === sid ? s.held.step : st.active_step;
+      const attempt = s.held ? '' : [s.draft.rawPrediction, s.draft.text].filter((x) => x.trim()).join('\n');
+      const label =
+        opts.message?.trim() ||
+        { EXPLAIN: 'Explain this', DIFFERENT: 'Explain it differently', SIMPLER: 'Simpler, please', OFFER: 'Yes, show me', ASK: '' }[action];
+      set((x) => ({ chatOpen: true, chat: { ...x.chat, pending: label } }));
+      const r = await guard(
+        () =>
+          api.explain(sid, {
+            action,
+            message: opts.message ?? '',
+            trigger: opts.trigger ?? '',
+            step_index: opts.stepIndex ?? viewing.step_index,
+            attempt,
+          }),
+        'Ask Pólya',
+        'explain',
+      );
+      set((x) => ({
+        chat: r
+          ? { ...x.chat, thread: r.thread, pending: null, offer: action === 'OFFER' ? null : x.chat.offer }
+          : { ...x.chat, pending: null },
+      }));
+      return r;
+    },
+    sayBack: async (text, messageId) => {
+      const st = get().sessionState;
+      if (!st) return null;
+      const r = await guard(() => api.sayBack(st.session.id, { text, message_id: messageId }), 'Say it back', 'sayBack');
+      if (r) {
+        set((x) => ({ chat: { ...x.chat, thread: r.thread } }));
+        scheduleRefresh('graph', 'stats');
+      }
+      return r;
+    },
+    learnAction: async (action, message = '') => {
+      const st = get().sessionState;
+      if (!st) return null;
+      const sid = st.session.id;
+      const label = message.trim() || { SKIP: '', GO_ON: 'Go on', QUIZ_ME: 'Quiz me', OPEN_REPLY: '', REPLY: '', ASK: '' }[action];
+      set((x) => ({ chat: { ...x.chat, pending: label || null } }));
+      const r = await guard(() => api.learn(sid, { action, message }), 'Learning chat', 'learn');
+      set((x) => {
+        if (!r) return { chat: { ...x.chat, pending: null } };
+        const cur = x.sessionState;
+        const patch: Partial<HarnessState> = { chat: { ...x.chat, thread: r.thread, sources: r.sources, pending: null } };
+        if (cur && cur.session.id === sid && cur.active_step.kind === 'LEARN') {
+          patch.sessionState = { ...cur, active_step: { ...cur.active_step, learn_ideas: r.learn_ideas } };
+        }
+        return patch;
+      });
+      if (r) scheduleRefresh('graph');
       return r;
     },
     runSubagent: async (agent, req) => {

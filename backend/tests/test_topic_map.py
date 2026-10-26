@@ -97,8 +97,10 @@ def test_attached_notes_ground_the_map_and_every_step(client, monkeypatch):
                                             "attached_files": ["notes/measure_rl_transformers.tex"]}).json()
     assert "Grounded in your notes: `notes/measure_rl_transformers.tex:" in st["active_step"]["rationale"]
     assert "From the learner's notes" in next(u for s, u in seen if "TOPIC_MAPPER" in s)
+    assert st["active_step"]["kind"] == "LEARN"            # new ideas are taught first (docs/specs/learn-chat)
+    client.post(f"/api/sessions/{st['session']['id']}/learn", json={"action": "SKIP"})
     steps = [u for s, u in seen if "TOPIC_MAPPER" not in s]
-    assert steps and all("From the learner's notes" in u for u in steps)
+    assert steps and all("measure_rl_transformers.tex" in u for u in steps)
 
 
 def test_notes_folder_passages_need_a_real_match(fresh_db):
